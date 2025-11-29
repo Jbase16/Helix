@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Trash & temp
+.Trashes
+*.swp
+*.lock
+*~
+
+# Xcode / Swift / Derived Data
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# Xcode Previews
+*.preview-thumbnails
+*.preview-thumbnails.db
+
+# Archives & DMGs
+*.zip
+*.tar.gz
+*.dmg
+*.pkg
+*.har
+
+# Caches
+*.xcarchives
+*.xcframework
