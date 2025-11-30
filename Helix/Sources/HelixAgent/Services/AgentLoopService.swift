@@ -101,11 +101,25 @@ final class AgentLoopService {
     }
     
     private func callLLM(prompt: String, systemPrompt: String, onToken: @escaping (String) -> Void) async throws {
-        return try await withCheckedThrowingContinuation { continuation in
-            llm.generate(prompt: prompt, systemPrompt: systemPrompt, onToken: onToken, onError: { error in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            var didResume = false
+
+            func resumeSuccess() {
+                guard !didResume else { return }
+                didResume = true
+                continuation.resume(returning: ())
+            }
+
+            func resumeFailure(_ error: HelixError) {
+                guard !didResume else { return }
+                didResume = true
                 continuation.resume(throwing: error)
+            }
+
+            llm.generate(prompt: prompt, systemPrompt: systemPrompt, onToken: onToken, onError: { error in
+                resumeFailure(error)
             }, onComplete: {
-                continuation.resume()
+                resumeSuccess()
             })
         }
     }
@@ -189,3 +203,4 @@ final class AgentLoopService {
         return ToolCall(toolName: toolName, arguments: arguments)
     }
 }
+

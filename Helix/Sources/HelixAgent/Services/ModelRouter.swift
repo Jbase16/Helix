@@ -9,8 +9,8 @@ import Foundation
 final class ModelRouter {
 
     // MARK: - Model Names
-    // Assumes 'llama2:70b' is installed via Ollama (from the external drive GGUF).
-    private let bigCode = "llama2:70b"             // heavyweight coding & reasoning
+    // Use a smaller default model for heavy coding to avoid huge local requirements.
+    private let bigCode = "llama3:latest"      // smaller heavy coding & reasoning
     private let generalChat = "llama3:latest"      // everyday assistant
     private let turbo = "phi3:mini"                // hyperfast small tasks
 
@@ -84,3 +84,4 @@ final class ModelRouter {
         return casualWords.contains(where: { prompt.contains($0) })
     }
 }
+
