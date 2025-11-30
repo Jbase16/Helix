@@ -12,7 +12,7 @@ final class ModelRouter {
     // Use a smaller default model for heavy coding to avoid huge local requirements.
     private let bigCode = "llama3:latest"      // smaller heavy coding & reasoning
     private let generalChat = "llama3:latest"      // everyday assistant
-    private let turbo = "phi3:mini"                // hyperfast small tasks
+    private let turbo = "llama3:latest"            // hyperfast small tasks
 
     // MARK: - Routing Entry Point
     func modelName(for prompt: String) -> String {
