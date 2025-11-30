@@ -4,6 +4,7 @@ struct MenuBarContentView: View {
 
     @EnvironmentObject var appState: HelixAppState
     @State private var input: String = ""
+    @State private var presentedError: HelixError? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -52,10 +53,12 @@ struct MenuBarContentView: View {
         }
         .padding()
         .frame(width: 340)
-        .alert(item: Binding<HelixError?>(
-            get: { appState.currentError },
-            set: { _ in appState.currentError = nil }
-        )) { error in
+        .onChange(of: appState.currentError != nil, initial: false) { _, isPresent in
+            if isPresent {
+                presentedError = appState.currentError
+            }
+        }
+        .alert(item: $presentedError) { error in
             Alert(title: Text("Error"), message: Text(error.localizedDescription), dismissButton: .default(Text("OK")))
         }
     }

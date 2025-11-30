@@ -21,7 +21,11 @@ final class AgentLoopService {
         self.tools = [
             ReadFileTool(),
             ListDirTool(),
-            RunCommandTool()
+            RunCommandTool(),
+            WriteFileTool(),
+            WebSearchTool(),
+            FetchURLTool(),
+            VisionTool()
         ]
     }
     
