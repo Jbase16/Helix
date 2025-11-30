@@ -5,22 +5,50 @@ import Foundation
 @MainActor
 final class HelixAppState: ObservableObject {
 
-    // Single main chat thread for now
-    @Published var thread: ChatThread
+    /// All chat threads saved in the app.  The first thread is selected by default.
+    @Published var threads: [ChatThread]
+
+    /// Identifier of the currently active thread.  If nil there are no threads.
+    @Published var selectedThreadID: UUID?
+
+    /// Whether the LLM is currently generating output.
     @Published var isProcessing: Bool = false
+
+    /// Any error produced by the model or network.  When set, the UI should present an alert.
+    @Published var currentError: HelixError?
 
     private let llm: LLMService
     private var cancellables = Set<AnyCancellable>()
 
+    // File on disk where threads are persisted.
+    private let threadsURL: URL = {
+        // Attempt to write to Application Support/HelixAgent/threads.json
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.homeDirectoryForCurrentUser
+        let dir = base.appendingPathComponent("HelixAgent", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("threads.json", isDirectory: false)
+    }()
+
     // MARK: - Init
 
+    /// Convenience init that creates a default `LLMService`.
     convenience init() {
         self.init(llm: LLMService())
     }
 
+    /// Designated initializer.  Accepts an `LLMService` for easier testing.
     init(llm: LLMService) {
         self.llm = llm
-        self.thread = ChatThread(title: "Main Chat", messages: [])
+        // Load any saved threads; if none exist, start with one main thread.
+        if let loaded = Self.loadThreads(from: threadsURL), !loaded.isEmpty {
+            self.threads = loaded
+            self.selectedThreadID = loaded.first?.id
+        } else {
+            let thread = ChatThread(title: "Main Chat", messages: [])
+            self.threads = [thread]
+            self.selectedThreadID = thread.id
+        }
 
         // Keep isProcessing in sync with the LLM service state.
         llm.$isGenerating
@@ -31,39 +59,115 @@ final class HelixAppState: ObservableObject {
             .store(in: &cancellables)
     }
 
-    // MARK: - Public API
+    // MARK: - Persistence
 
-    /// Reset the conversation to an empty main thread.
-    func clear() {
-        thread = ChatThread(title: "Main Chat", messages: [])
+    /// Save the current set of threads to disk.
+    private func save() {
+        do {
+            let data = try JSONEncoder().encode(threads)
+            try data.write(to: threadsURL, options: [.atomic])
+        } catch {
+            print("[HelixAppState] Failed to save threads: \(error)")
+        }
     }
 
-    /// Send a user message and stream an assistant reply into the thread.
+    /// Load threads from disk if available.
+    private static func loadThreads(from url: URL) -> [ChatThread]? {
+        do {
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode([ChatThread].self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Thread Management
+
+    /// Create a new chat thread and select it.
+    func createThread(title: String = "New Chat") {
+        let newThread = ChatThread(title: title)
+        threads.append(newThread)
+        selectedThreadID = newThread.id
+        save()
+    }
+
+    /// Delete a chat thread by its id.  If it is the last thread, a new one is created.
+    func deleteThread(id: UUID) {
+        if let idx = threads.firstIndex(where: { $0.id == id }) {
+            threads.remove(at: idx)
+            if threads.isEmpty {
+                let newThread = ChatThread(title: "Main Chat")
+                threads = [newThread]
+            }
+            selectedThreadID = threads.first?.id
+            save()
+        }
+    }
+
+    /// Select a thread by its id.
+    func selectThread(id: UUID) {
+        if threads.contains(where: { $0.id == id }) {
+            selectedThreadID = id
+        }
+    }
+
+    /// Returns the currently selected thread, if any.
+    var currentThread: ChatThread? {
+        get {
+            guard let id = selectedThreadID else { return nil }
+            return threads.first(where: { $0.id == id })
+        }
+        set {
+            guard let newValue else { return }
+            if let idx = threads.firstIndex(where: { $0.id == newValue.id }) {
+                threads[idx] = newValue
+                save()
+            }
+        }
+    }
+
+    // MARK: - Public API
+
+    /// Reset the current conversation to an empty thread.
+    func clear() {
+        guard var thread = currentThread else { return }
+        thread.clear()
+        currentThread = thread
+    }
+
+    /// Send a user message and stream an assistant reply into the selected thread.
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard var thread = currentThread else { return }
 
-        // 1. Append user message.
+        // 1. Append user message using ChatThread.append() to update lastUpdated.
         let userMessage = ChatMessage(role: .user, text: trimmed)
-        thread.messages.append(userMessage)
+        thread.append(userMessage)
 
         // 2. Append placeholder assistant message we'll stream into.
-        let reply = ChatMessage(role: .assistant, text: "")
-        thread.messages.append(reply)
-        let replyID = reply.id
+        let assistantPlaceholder = ChatMessage(role: .assistant, text: "")
+        thread.append(assistantPlaceholder)
+        let replyID = assistantPlaceholder.id
+        currentThread = thread
 
         // 3. Kick off generation. LLMService guarantees `onToken`
         //    is called on the main actor, so it is safe to mutate state here.
-        llm.generate(prompt: trimmed) { [weak self] token in
+        llm.generate(prompt: trimmed, onToken: { [weak self] token in
             guard let self else { return }
-
-            guard let index = self.thread.messages.firstIndex(where: { $0.id == replyID }) else {
-                return
+            guard var thread = self.currentThread else { return }
+            if let index = thread.messages.firstIndex(where: { $0.id == replyID }) {
+                thread.messages[index].text.append(token)
+                self.currentThread = thread
             }
-
-            // Update the assistant message text in place.
-            self.thread.messages[index].text.append(token)
-        }
+        }, onError: { [weak self] error in
+            Task { @MainActor in
+                self?.currentError = error
+            }
+        }, onComplete: { [weak self] in
+            // Save the conversation when complete
+            self?.save()
+        })
     }
 
     /// Cancel any in-flight LLM generation.
@@ -71,3 +175,4 @@ final class HelixAppState: ObservableObject {
         llm.cancel()
     }
 }
+

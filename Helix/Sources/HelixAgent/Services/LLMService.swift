@@ -26,22 +26,26 @@ final class LLMService: ObservableObject {
     }
 
     // MARK: - Main Generate Function
-    func generate(prompt: String, onToken: @escaping (String) -> Void) {
+    /// Generate a response for the given prompt.  Tokens are streamed back via `onToken`.  If an error occurs, `onError` is called with a `HelixError`.  Once the generation finishes or is cancelled, `onComplete` is invoked.
+    func generate(prompt: String,
+                  onToken: @escaping (String) -> Void,
+                  onError: @escaping (HelixError) -> Void,
+                  onComplete: @escaping () -> Void) {
         // Cancel any previous request
         cancel()
 
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             print("[LLMService] Ignoring empty prompt")
+            onComplete()
             return
         }
 
         streamedResponse = ""
         isGenerating = true
 
-        // 🔴 TEMPORARY: Hardwire to a known-good model.
-        // let modelName = router.modelName(for: trimmed)
-        let modelName = "llama3:latest"
+        // Use the router to select the best model based on the prompt.
+        let modelName = router.modelName(for: trimmed)
         print("[LLMService] Starting generation with model: \(modelName)")
 
         currentTask = Task.detached { [weak self] in
@@ -51,11 +55,13 @@ final class LLMService: ObservableObject {
                 Task { @MainActor in
                     self.isGenerating = false
                     print("[LLMService] Generation finished (defer)")
+                    onComplete()
                 }
             }
 
             guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
                 print("[LLMService] Invalid URL")
+                onError(.unknown(message: "Invalid Ollama URL"))
                 return
             }
 
@@ -73,13 +79,20 @@ final class LLMService: ObservableObject {
                 request.httpBody = try JSONEncoder().encode(body)
             } catch {
                 print("[LLMService] Encoding error: \(error)")
+                onError(.decoding(underlying: error))
                 return
             }
 
             print("[LLMService] Request body encoded, calling Ollama…")
 
             do {
-                let (bytes, _) = try await URLSession.shared.bytes(for: request)
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                // Check HTTP status code
+                if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+                    print("[LLMService] Non‑200 response: \(httpResponse.statusCode)")
+                    onError(.invalidResponse(statusCode: httpResponse.statusCode))
+                    return
+                }
 
                 for try await line in bytes.lines {
                     if Task.isCancelled {
@@ -107,6 +120,7 @@ final class LLMService: ObservableObject {
 
                     } catch {
                         print("[LLMService] Chunk decode error: \(error)")
+                        onError(.decoding(underlying: error))
                         continue
                     }
                 }
@@ -114,10 +128,13 @@ final class LLMService: ObservableObject {
             } catch {
                 if Task.isCancelled {
                     print("[LLMService] Request cancelled (outer catch)")
+                    onError(.cancellation)
                 } else {
                     print("[LLMService] Request failed: \(error)")
+                    onError(.network(underlying: error))
                 }
             }
         }
     }
 }
+

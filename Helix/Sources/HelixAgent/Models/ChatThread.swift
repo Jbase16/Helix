@@ -55,3 +55,4 @@ struct ChatThread: Identifiable, Codable, Hashable {
         lastUpdated = Date()
     }
 }
+
