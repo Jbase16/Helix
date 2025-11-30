@@ -28,6 +28,7 @@ final class LLMService: ObservableObject {
     // MARK: - Main Generate Function
     /// Generate a response for the given prompt.  Tokens are streamed back via `onToken`.  If an error occurs, `onError` is called with a `HelixError`.  Once the generation finishes or is cancelled, `onComplete` is invoked.
     func generate(prompt: String,
+                  systemPrompt: String? = nil,
                   onToken: @escaping (String) -> Void,
                   onError: @escaping (HelixError) -> Void,
                   onComplete: @escaping () -> Void) {
@@ -72,6 +73,7 @@ final class LLMService: ObservableObject {
             let body = GenerateRequest(
                 model: modelName,
                 prompt: trimmed,
+                system: systemPrompt,
                 stream: true
             )
             

@@ -18,6 +18,7 @@ final class HelixAppState: ObservableObject {
     @Published var currentError: HelixError?
 
     private let llm: LLMService
+    private let agentLoop: AgentLoopService
     private var cancellables = Set<AnyCancellable>()
 
     // File on disk where threads are persisted.
@@ -30,6 +31,12 @@ final class HelixAppState: ObservableObject {
         return dir.appendingPathComponent("threads.json", isDirectory: false)
     }()
 
+    /// The current tool call waiting for user approval.
+    @Published var pendingAction: ToolCall?
+    
+    /// Continuation to resume the agent loop after approval/rejection.
+    private var permissionContinuation: CheckedContinuation<Bool, Never>?
+
     // MARK: - Init
 
     /// Convenience init that creates a default `LLMService`.
@@ -40,6 +47,8 @@ final class HelixAppState: ObservableObject {
     /// Designated initializer.  Accepts an `LLMService` for easier testing.
     init(llm: LLMService) {
         self.llm = llm
+        self.agentLoop = AgentLoopService(llm: llm)
+        
         // Load any saved threads; if none exist, start with one main thread.
         if let loaded = Self.loadThreads(from: threadsURL), !loaded.isEmpty {
             self.threads = loaded
@@ -151,14 +160,20 @@ final class HelixAppState: ObservableObject {
         let replyID = assistantPlaceholder.id
         currentThread = thread
 
-        // 3. Kick off generation. LLMService guarantees `onToken`
-        //    is called on the main actor, so it is safe to mutate state here.
-        llm.generate(prompt: trimmed, onToken: { [weak self] token in
+        // 3. Kick off Agent Loop.
+        agentLoop.run(prompt: trimmed, onToken: { [weak self] token in
             guard let self else { return }
             guard var thread = self.currentThread else { return }
             if let index = thread.messages.firstIndex(where: { $0.id == replyID }) {
                 thread.messages[index].text.append(token)
                 self.currentThread = thread
+            }
+        }, onRequestPermission: { [weak self] toolCall in
+            return await withCheckedContinuation { continuation in
+                Task { @MainActor in
+                    self?.pendingAction = toolCall
+                    self?.permissionContinuation = continuation
+                }
             }
         }, onError: { [weak self] error in
             Task { @MainActor in
@@ -169,10 +184,28 @@ final class HelixAppState: ObservableObject {
             self?.save()
         })
     }
+    
+    /// Approve the pending action.
+    func approvePendingAction() {
+        pendingAction = nil
+        permissionContinuation?.resume(returning: true)
+        permissionContinuation = nil
+    }
+    
+    /// Reject the pending action.
+    func rejectPendingAction() {
+        pendingAction = nil
+        permissionContinuation?.resume(returning: false)
+        permissionContinuation = nil
+    }
 
     /// Cancel any in-flight LLM generation.
     func cancelGeneration() {
         llm.cancel()
+        // If waiting for permission, cancel that too
+        if permissionContinuation != nil {
+            rejectPendingAction()
+        }
     }
 }
 

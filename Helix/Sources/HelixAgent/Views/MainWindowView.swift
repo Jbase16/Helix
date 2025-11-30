@@ -108,6 +108,49 @@ struct MainWindowView: View {
             Divider()
 
             // --------------------------------------------------------
+            // Permission Request Banner
+            // --------------------------------------------------------
+            if let action = appState.pendingAction {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("⚠️ Permission Requested")
+                        .font(.headline)
+                        .foregroundColor(.orange)
+                    
+                    Text("Helix wants to execute:")
+                        .font(.subheadline)
+                    
+                    Text("\(action.toolName)(\(action.arguments.description))")
+                        .font(.system(.caption, design: .monospaced))
+                        .padding(8)
+                        .background(Color.black.opacity(0.1))
+                        .cornerRadius(6)
+                    
+                    HStack {
+                        Button("Reject") {
+                            appState.rejectPendingAction()
+                        }
+                        .keyboardShortcut(.escape, modifiers: [])
+                        
+                        Spacer()
+                        
+                        Button("Approve") {
+                            appState.approvePendingAction()
+                        }
+                        .keyboardShortcut(.return, modifiers: [.command, .shift])
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding()
+                .background(Color(NSColor.windowBackgroundColor))
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.orange, lineWidth: 1)
+                )
+                .padding()
+                .transition(.move(edge: .bottom))
+            }
+
+            // --------------------------------------------------------
             // Input Area
             // --------------------------------------------------------
             HStack(alignment: .bottom, spacing: 8) {

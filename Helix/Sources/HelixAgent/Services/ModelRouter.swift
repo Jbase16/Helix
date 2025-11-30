@@ -9,7 +9,8 @@ import Foundation
 final class ModelRouter {
 
     // MARK: - Model Names
-    private let bigCode = "qwen2.5-coder:7b"       // heavyweight coding
+    // Assumes 'llama2:70b' is installed via Ollama (from the external drive GGUF).
+    private let bigCode = "llama2:70b"             // heavyweight coding & reasoning
     private let generalChat = "llama3:latest"      // everyday assistant
     private let turbo = "phi3:mini"                // hyperfast small tasks
 

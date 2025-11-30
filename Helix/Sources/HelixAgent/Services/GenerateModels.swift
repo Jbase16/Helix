@@ -9,6 +9,7 @@ nonisolated
 struct GenerateRequest: Encodable, Sendable {
     let model: String
     let prompt: String
+    let system: String?
     let stream: Bool
 }
 
