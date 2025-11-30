@@ -93,7 +93,8 @@ final class LLMService: ObservableObject {
                 model: modelName,
                 prompt: trimmed,
                 system: systemPrompt,
-                stream: true
+                stream: true,
+                options: GenerateOptions(stop: ["User:", "Assistant:", "<|endoftext|>"], temperature: 0.7)
             )
             
             do {
@@ -215,7 +216,8 @@ final class LLMService: ObservableObject {
                         model: modelName,
                         prompt: trimmed,
                         system: systemPrompt,
-                        stream: false
+                        stream: false,
+                        options: GenerateOptions(stop: ["User:", "Assistant:", "<|endoftext|>"], temperature: 0.7)
                     )
                     fallbackRequest.httpBody = try JSONEncoder().encode(fallbackBody)
                 } catch {
