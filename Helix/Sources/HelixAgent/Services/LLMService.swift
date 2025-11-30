@@ -86,6 +86,11 @@ final class LLMService: ObservableObject {
             print("[LLMService] Request body encoded, calling Ollama…")
 
             do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = 180   // <-- FIX: allow model load time
+                
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
                 // Check HTTP status code
                 if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
@@ -130,6 +135,9 @@ final class LLMService: ObservableObject {
                     print("[LLMService] Request cancelled (outer catch)")
                     onError(.cancellation)
                 } else {
+                    await MainActor.run {
+                        self.streamedResponse = "⚠️ Ollama did not respond (model still loading or stalled)."
+                    }
                     print("[LLMService] Request failed: \(error)")
                     onError(.network(underlying: error))
                 }
