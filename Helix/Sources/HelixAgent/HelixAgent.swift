@@ -12,6 +12,17 @@ struct HelixAgentApp: App {
     @StateObject private var appState = HelixAppState()
 
     var body: some Scene {
+        
+        // Main chat window
+        WindowGroup {
+            MainWindowView()
+                .environmentObject(appState)
+            
+        }
+        // Prevent bizarre resize behavior while we’re iterating
+        .windowResizability(.contentSize)
+        // If you like the hidden title bar look, you can re-enable this:
+        // .windowStyle(.hiddenTitleBar)
 
         // Menubar entry (Helix lives here when "closed")
         MenuBarExtra("Helix", systemImage: "sparkles") {
@@ -21,14 +32,7 @@ struct HelixAgentApp: App {
         // you can tweak style if you want, but this is safe & stable:
         .menuBarExtraStyle(.window)
 
-        // Main chat window
-        WindowGroup {
-            MainWindowView()
-                .environmentObject(appState)
-        }
-        // Prevent bizarre resize behavior while we’re iterating
-        .windowResizability(.contentSize)
-        // If you like the hidden title bar look, you can re-enable this:
-        // .windowStyle(.hiddenTitleBar)
+        
+       
     }
 }
