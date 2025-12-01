@@ -10,9 +10,9 @@ final class ModelRouter {
 
     // MARK: - Model Names
     // Use a smaller default model for heavy coding to avoid huge local requirements.
-    private let bigCode = "llama3:latest"      // smaller heavy coding & reasoning
-    private let generalChat = "llama3:latest"      // everyday assistant
-    private let turbo = "llama3:latest"            // hyperfast small tasks
+    private let bigCode = "deepseek-coder-v2:16b"      // smaller heavy coding & reasoning
+    private let generalChat = "dolphin-llama3"      // everyday assistant
+    private let turbo = "dolphin-llama3"            // hyperfast small tasks
 
     // MARK: - Routing Entry Point
     func modelName(for prompt: String) -> String {
