@@ -7,8 +7,69 @@ import Foundation
 import Combine
 import SwiftUI
 
+struct GenerateRequest: Encodable, Sendable {
+    let model: String
+    let prompt: String
+    let system: String?
+    let stream: Bool
+    let options: GenerateOptions?
+    
+    enum CodingKeys: String, CodingKey {
+        case model, prompt, system, stream, options
+    }
+    
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(system, forKey: .system)
+        try container.encode(stream, forKey: .stream)
+        try container.encode(options, forKey: .options)
+    }
+}
+
+struct GenerateOptions: Encodable, Sendable {
+    let stop: [String]?
+    let temperature: Double?
+    
+    enum CodingKeys: String, CodingKey {
+        case stop, temperature
+    }
+    
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(stop, forKey: .stop)
+        try container.encode(temperature, forKey: .temperature)
+    }
+}
+
+struct GenerateChunk: Decodable, Sendable {
+    let response: String?
+    let done: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case response, done
+    }
+    
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.response = try container.decodeIfPresent(String.self, forKey: .response)
+        self.done = try container.decodeIfPresent(Bool.self, forKey: .done)
+    }
+}
+
 @MainActor
 final class LLMService: ObservableObject {
+
+    // MARK: - Non-isolated Helpers
+    private nonisolated func encodeRequest(_ request: GenerateRequest) throws -> Data {
+        return try JSONEncoder().encode(request)
+    }
+    
+    private nonisolated func decodeChunk(_ data: Data) throws -> GenerateChunk {
+        return try JSONDecoder().decode(GenerateChunk.self, from: data)
+    }
+
     
     @Published var isGenerating: Bool = false
     @Published var streamedResponse: String = ""
@@ -98,7 +159,7 @@ final class LLMService: ObservableObject {
             )
             
             do {
-                request.httpBody = try JSONEncoder().encode(body)
+                request.httpBody = try self.encodeRequest(body)
             } catch {
                 print("[LLMService] Encoding error: \(error)")
                 emitError(.decoding(underlying: error))
@@ -149,7 +210,7 @@ final class LLMService: ObservableObject {
                         guard let data = line.data(using: .utf8) else { continue }
                         
                         do {
-                            let chunk = try JSONDecoder().decode(GenerateChunk.self, from: data)
+                            let chunk = try self.decodeChunk(data)
                             
                             if let token = chunk.response, !token.isEmpty {
                                 var tokenToEmit = token
@@ -164,9 +225,10 @@ final class LLMService: ObservableObject {
                                 }
 
                                 if !tokenToEmit.isEmpty {
+                                    let tokenToCapture = tokenToEmit
                                     await MainActor.run {
-                                        self.streamedResponse += tokenToEmit
-                                        onToken(tokenToEmit)
+                                        self.streamedResponse += tokenToCapture
+                                        onToken(tokenToCapture)
                                     }
                                 }
 
@@ -219,7 +281,7 @@ final class LLMService: ObservableObject {
                         stream: false,
                         options: GenerateOptions(stop: ["User:", "Assistant:", "<|endoftext|>"], temperature: 0.7)
                     )
-                    fallbackRequest.httpBody = try JSONEncoder().encode(fallbackBody)
+                    fallbackRequest.httpBody = try self.encodeRequest(fallbackBody)
                 } catch {
                     print("[LLMService] Encoding error (fallback): \(error)")
                     emitError(.decoding(underlying: error))
@@ -241,7 +303,7 @@ final class LLMService: ObservableObject {
                         return
                     }
                     do {
-                        let chunk = try JSONDecoder().decode(GenerateChunk.self, from: data)
+                        let chunk = try self.decodeChunk(data)
                         if let token = chunk.response, !token.isEmpty {
                             await MainActor.run {
                                 self.streamedResponse += token

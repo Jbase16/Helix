@@ -13,12 +13,19 @@ final class ModelRouter {
     private let bigCode = "deepseek-coder-v2:16b"      // smaller heavy coding & reasoning
     private let generalChat = "dolphin-llama3"      // everyday assistant
     private let turbo = "dolphin-llama3"            // hyperfast small tasks
+    private let nsfw = "wizardlm-uncensored:13b"      // explicit/NSFW/edgy content
 
     // MARK: - Routing Entry Point
     func modelName(for prompt: String) -> String {
         let lower = prompt.lowercased()
 
-        // 1. If it's REAL code or a true coding request → heavy coder
+        // 1. If it's NSFW/explicit/edgy → WizardLM Uncensored
+        if isNSFWRequest(prompt: lower) {
+            print("[ModelRouter] Routing → NSFW MODEL (wizardlm-uncensored)")
+            return nsfw
+        }
+
+        // 2. If it's REAL code or a true coding request → heavy coder
         if isSeriousCoding(prompt: lower) {
             print("[ModelRouter] Routing → BIG CODE MODEL")
             return bigCode
@@ -82,6 +89,18 @@ final class ModelRouter {
         ]
 
         return casualWords.contains(where: { prompt.contains($0) })
+    }
+
+    private func isNSFWRequest(prompt: String) -> Bool {
+        let nsfwIndicators = [
+            "explicit", "nsfw", "dirty joke", "sexual", "sexually",
+            "adult", "edgy", "dark humor", "dark joke",
+            "uncensored", "no filter", "unfiltered",
+            "inappropriate", "offensive", "raunchy",
+            "profanity", "vulgar", "crude", "fuck"
+        ]
+
+        return nsfwIndicators.contains(where: { prompt.contains($0) })
     }
 }
 
