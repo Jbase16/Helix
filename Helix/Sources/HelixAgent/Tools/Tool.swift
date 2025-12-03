@@ -33,6 +33,13 @@ protocol Tool: Sendable {
     /// Whether this tool requires user permission to run.
     var requiresPermission: Bool { get }
     
+    /// Whether the permission for this tool should be cached for the session.
+    var shouldCachePermission: Bool { get }
+    
     /// Execute the tool with the given arguments.
     func run(arguments: [String: String]) async throws -> ToolResult
+}
+
+extension Tool {
+    var shouldCachePermission: Bool { false }
 }

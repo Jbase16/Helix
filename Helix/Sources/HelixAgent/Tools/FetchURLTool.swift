@@ -7,6 +7,7 @@ struct FetchURLTool: Tool {
     var description: String { "Fetches the content at the given absolute URL and returns the response body as a string. Useful for retrieving API responses or web pages." }
     var usageSchema: String { "fetch_url(url=\"<absolute_url>\")" }
     var requiresPermission: Bool { false }
+    var shouldCachePermission: Bool { true }
 
     func run(arguments: [String : String]) async throws -> ToolResult {
         guard let urlString = arguments["url"], let url = URL(string: urlString) else {

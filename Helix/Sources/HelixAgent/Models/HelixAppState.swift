@@ -161,7 +161,10 @@ final class HelixAppState: ObservableObject {
         currentThread = thread
 
         // 3. Kick off Agent Loop.
-        agentLoop.run(prompt: trimmed, onToken: { [weak self] token in
+        // We pass all messages EXCEPT the placeholder we just added, because the agent loop will generate that response.
+        let historyForAgent = thread.messages.dropLast() // Remove the empty placeholder
+        
+        agentLoop.run(history: Array(historyForAgent), onToken: { [weak self] token in
             guard let self else { return }
             guard var thread = self.currentThread else { return }
             if let index = thread.messages.firstIndex(where: { $0.id == replyID }) {

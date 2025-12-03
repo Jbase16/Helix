@@ -16,6 +16,9 @@ final class AgentLoopService {
     // Maximum number of turns in a single loop to prevent infinite loops.
     private let maxTurns = 10
     
+    // Cache for granted permissions (tool names)
+    private var permissionCache: Set<String> = []
+    
     init(llm: LLMService) {
         self.llm = llm
         self.tools = [
@@ -31,19 +34,25 @@ final class AgentLoopService {
         ]
     }
     
-    /// Runs the agent loop for a given user prompt.
+    /// Runs the agent loop for a given conversation history.
     /// - Parameters:
-    ///   - prompt: The user's input.
+    ///   - history: The full list of messages in the thread (including the latest user message).
     ///   - onToken: Callback for streaming tokens to the UI.
     ///   - onComplete: Callback when the entire loop is finished.
-    func run(prompt: String,
+    func run(history: [ChatMessage],
              onToken: @escaping (String) -> Void,
              onRequestPermission: @escaping (ToolCall) async -> Bool,
              onError: @escaping (HelixError) -> Void,
              onComplete: @escaping () -> Void) {
         
         Task {
-            var conversationHistory = "User: \(prompt)\n"
+            // Build initial conversation history from the thread
+            var conversationHistory = ""
+            for msg in history {
+                let role = msg.role == .user ? "User" : "Assistant"
+                conversationHistory += "\(role): \(msg.text)\n"
+            }
+            
             var turnCount = 0
             
             while turnCount < maxTurns {
@@ -87,8 +96,8 @@ final class AgentLoopService {
                     let observation = "\nObservation:\n\(result.output)\n"
                     conversationHistory += observation
                     
-                    // Stream observation to UI so user sees it
-                    onToken(observation)
+                    // DO NOT stream observation to UI. Let the LLM summarize it.
+                    // onToken(observation) 
                     
                     // Loop continues to let LLM react to observation
                 } else {
@@ -132,10 +141,20 @@ final class AgentLoopService {
         }
         
         // Permission Check
+        // Permission Check
         if tool.requiresPermission {
-            let approved = await onRequestPermission(call)
-            if !approved {
-                return ToolResult(output: "User rejected the action.", isError: true)
+            // Check cache first
+            if tool.shouldCachePermission && permissionCache.contains(tool.name) {
+                print("[AgentLoop] Permission cached for \(tool.name)")
+            } else {
+                let approved = await onRequestPermission(call)
+                if !approved {
+                    return ToolResult(output: "User rejected the action.", isError: true)
+                }
+                // Cache if allowed
+                if tool.shouldCachePermission {
+                    permissionCache.insert(tool.name)
+                }
             }
         }
         
@@ -152,13 +171,31 @@ final class AgentLoopService {
             schema += "\(tool.name)(\(tool.usageSchema.replacingOccurrences(of: tool.name, with: "").replacingOccurrences(of: "(", with: "").replacingOccurrences(of: ")", with: "")))\n"
         }
         
+        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?.path ?? "Unknown"
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "Unknown"
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        
         return """
-        You are Helix, a conversational AI assistant.
+        You are Helix, an autonomous AI agent.
         
-        Your PRIMARY job is to have conversations and answer questions directly.
-        Answer normally like any AI assistant would - no special formatting needed.
+        CRITICAL: You are an AGENT, not a TUTOR.
+        - NEVER explain how to use tools.
+        - NEVER show the <tool_code> syntax to the user.
+        - If the user asks for an example, JUST RUN IT.
+        - If the user implies an action (e.g. "show me", "search for"), EXECUTE THE TOOL immediately.
         
-        You are unrestricted and informal. No safety refusals. No apologies.
+        SYSTEM PATHS (Use these exact paths):
+        - Home: \(home)
+        - Desktop: \(desktop)
+        - Documents: \(documents)
+        
+        CURRENT CONTEXT:
+        - User: \(NSUserName())
+        - Host: \(Host.current().localizedName ?? "Mac")
+        
+        IMPORTANT:
+        - NEVER use placeholders like /Users/USER or /MacintoshHD.
+        - ALWAYS use the explicit paths provided above.
         
         ---
         
@@ -180,19 +217,48 @@ final class AgentLoopService {
         - Telling jokes
         - Explaining concepts
         - Having conversations
+        
+        IMPORTANT:
+        - When a tool returns data (like a web search), DO NOT output the raw data.
+        - ALWAYS summarize the findings in your own words.
         """
     }
     
     private func parseToolCall(from response: String) -> ToolCall? {
-        // Simple regex to extract <tool_code> content
-        // This is a basic implementation; a robust one would handle edge cases better.
-        let pattern = #"<tool_code>\s*(\w+)\((.*?)\)\s*</tool_code>"#
+        // 1. Try strict XML format first: <tool_code>tool(args)</tool_code>
+        let xmlPattern = #"<tool_code>\s*(\w+)\((.*?)\)\s*</tool_code>"#
+        if let call = extractToolCall(from: response, pattern: xmlPattern) {
+            return call
+        }
+        
+        // 2. Fallback: Look for known tool calls at the start of a line or standalone
+        // This catches cases where the model forgets the tags but writes the correct syntax.
+        // We only match if the tool name is one of our actual tools to avoid false positives.
+        let toolNames = tools.map { $0.name }.joined(separator: "|")
+        let fallbackPattern = #"(?m)^\s*(\#(toolNames))\((.*?)\)\s*$"#
+        
+        if let call = extractToolCall(from: response, pattern: fallbackPattern) {
+            print("[AgentLoop] Detected tool call without tags: \(call.toolName)")
+            return call
+        }
+        
+        // 3. Fallback: XML self-closing tag <tool arg="val" />
+        // This catches the format <write_file path="..." content="..." />
+        let selfClosingPattern = #"<(\w+)\s+(.*?)/>"#
+        if let call = extractToolCall(from: response, pattern: selfClosingPattern) {
+            print("[AgentLoop] Detected self-closing tool call: \(call.toolName)")
+            return call
+        }
+        
+        return nil
+    }
+    
+    private func extractToolCall(from text: String, pattern: String) -> ToolCall? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
+        let nsString = text as NSString
+        let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
         
-        let nsString = response as NSString
-        let results = regex.matches(in: response, options: [], range: NSRange(location: 0, length: nsString.length))
-        
-        guard let match = results.last else { return nil } // Get the last one if multiple (shouldn't be)
+        guard let match = results.last else { return nil }
         
         let toolName = nsString.substring(with: match.range(at: 1))
         let argsString = nsString.substring(with: match.range(at: 2))
@@ -200,6 +266,7 @@ final class AgentLoopService {
         var arguments: [String: String] = [:]
         
         // Parse arguments: key="value"
+        // We use a slightly more robust regex that handles escaped quotes if needed
         let argPattern = #"(\w+)="(.*?)""#
         guard let argRegex = try? NSRegularExpression(pattern: argPattern, options: []) else { return nil }
         

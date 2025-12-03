@@ -8,6 +8,7 @@ struct VisionTool: Tool {
     var description: String { "Captures a screenshot of the main display and returns the absolute path to the PNG file. Useful for visual analysis. Requires user permission." }
     var usageSchema: String { "vision()" }
     var requiresPermission: Bool { true }
+    var shouldCachePermission: Bool { true }
 
     func run(arguments: [String : String]) async throws -> ToolResult {
         // Generate a temporary file path
