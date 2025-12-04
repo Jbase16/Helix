@@ -25,6 +25,18 @@ final class LLMService: ObservableObject {
     
     private var currentTask: Task<Void, Never>?
     
+    init() {
+        // Preload the default model on init to reduce time-to-first-token
+        Task {
+            await preloadDefaultModel()
+        }
+    }
+    
+    /// Preload the default chat model into GPU memory for faster first response.
+    func preloadDefaultModel() async {
+        await client.preloadModel("dolphin-llama3")
+    }
+    
     // MARK: - Cancel Any In-Flight Generation
     func cancel() {
         currentTask?.cancel()
@@ -129,11 +141,16 @@ final class LLMService: ObservableObject {
     // MARK: - Private Helpers
     
     private nonisolated func fallbackModel(for model: String) -> String? {
+        // Define fallback chain: specialized models → general → basic
         switch model {
         case "wizardlm-uncensored:13b":
             return "dolphin-llama3"
         case "deepseek-coder-v2:16b":
             return "dolphin-llama3"
+        case "dolphin-llama3":
+            return "llama3"  // Try standard llama3 if dolphin variant unavailable
+        case "llama3":
+            return "llama2"  // Last resort
         default:
             return nil
         }

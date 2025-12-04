@@ -12,19 +12,33 @@ struct PermissionsView: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        TabView {
-            GrantedPermissionsList(manager: permissionManager)
-                .tabItem {
-                    Label("Permissions", systemImage: "lock.shield")
+        VStack(spacing: 0) {
+            // Header with close button
+            HStack {
+                Text("Manage Permissions")
+                    .font(.headline)
+                Spacer()
+                Button("Done") {
+                    dismiss()
                 }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            .background(Color(nsColor: .windowBackgroundColor))
             
-            AuditLogList(manager: permissionManager)
-                .tabItem {
-                    Label("Audit Log", systemImage: "list.bullet.rectangle")
-                }
+            TabView {
+                GrantedPermissionsList(manager: permissionManager)
+                    .tabItem {
+                        Label("Permissions", systemImage: "lock.shield")
+                    }
+                
+                AuditLogList(manager: permissionManager)
+                    .tabItem {
+                        Label("Audit Log", systemImage: "list.bullet.rectangle")
+                    }
+            }
         }
-        .frame(width: 600, height: 400)
-        .padding()
+        .frame(width: 600, height: 450)
     }
 }
 

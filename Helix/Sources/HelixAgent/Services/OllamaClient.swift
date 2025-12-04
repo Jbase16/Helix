@@ -64,18 +64,24 @@ struct GenerateChunk: Decodable, Sendable {
 
 actor OllamaClient {
     private let baseURL = URL(string: "http://127.0.0.1:11434/api/generate")!
+    private let keepAliveURL = URL(string: "http://127.0.0.1:11434/api/generate")!
+    
+    // Reuse a single session for all requests (faster connection reuse)
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 600
+        config.waitsForConnectivity = true
+        // Keep connections open for reuse
+        config.httpMaximumConnectionsPerHost = 2
+        return URLSession(configuration: config)
+    }()
     
     func streamGeneration(request: GenerateRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
         var urlRequest = URLRequest(url: baseURL)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = try JSONEncoder().encode(request)
-        
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 120
-        config.timeoutIntervalForResource = 600
-        config.waitsForConnectivity = true
-        let session = URLSession(configuration: config)
         
         return try await session.bytes(for: urlRequest)
     }
@@ -86,11 +92,32 @@ actor OllamaClient {
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = try JSONEncoder().encode(request)
         
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 120
-        let session = URLSession(configuration: config)
-        
         return try await session.data(for: urlRequest)
+    }
+    
+    /// Preload a model into memory by sending a minimal request.
+    /// Call this on app launch to warm up the default model.
+    func preloadModel(_ modelName: String) async {
+        let request = GenerateRequest(
+            model: modelName,
+            prompt: "hi",
+            system: nil,
+            stream: false,
+            options: GenerateOptions(stop: nil, temperature: 0.0)
+        )
+        
+        do {
+            var urlRequest = URLRequest(url: keepAliveURL)
+            urlRequest.httpMethod = "POST"
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.httpBody = try JSONEncoder().encode(request)
+            urlRequest.timeoutInterval = 30
+            
+            let _ = try await session.data(for: urlRequest)
+            print("[OllamaClient] Model '\(modelName)' preloaded successfully")
+        } catch {
+            print("[OllamaClient] Failed to preload model '\(modelName)': \(error)")
+        }
     }
     
     nonisolated func decodeChunk(_ data: Data) throws -> GenerateChunk {

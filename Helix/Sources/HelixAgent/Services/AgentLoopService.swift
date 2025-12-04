@@ -60,6 +60,7 @@ final class AgentLoopService {
             while turnCount < maxTurns {
                 turnCount += 1
                 print("[AgentLoop] Turn \(turnCount)")
+                print("[AgentLoop] Conversation length: \(conversationHistory.count) chars")
                 
                 // 1. Construct System Prompt
                 let systemPrompt = constructSystemPrompt()
@@ -73,13 +74,18 @@ final class AgentLoopService {
                     onToken(token) // Stream to UI
                 }
                 
+                print("[AgentLoop] Calling LLM...")
+                
                 do {
                     try await callLLM(prompt: conversationHistory, systemPrompt: systemPrompt, onToken: loopTokenCallback)
+                    print("[AgentLoop] LLM call completed. Response length: \(currentResponse.count)")
                 } catch let error as HelixError {
+                    print("[AgentLoop] LLM ERROR (HelixError): \(error)")
                     onError(error)
                     onComplete()
                     return
                 } catch {
+                    print("[AgentLoop] LLM ERROR (unknown): \(error)")
                     onError(.unknown(message: error.localizedDescription))
                     onComplete()
                     return
@@ -103,7 +109,12 @@ final class AgentLoopService {
                     
                     // Loop continues to let LLM react to observation
                 } else {
-                    // No tool call - this is a direct answer, we're done
+                    // No tool call - this is a direct answer
+                    if currentResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        // Model returned empty response - provide fallback
+                        print("[AgentLoop] Empty response detected, providing fallback")
+                        onToken("Done.")
+                    }
                     print("[AgentLoop] Direct answer provided, finishing.")
                     break
                 }

@@ -216,7 +216,9 @@ final class HelixAppState: ObservableObject {
             "screenshot", "see my screen", "capture",
             "run", "execute", "command", "terminal",
             "clipboard", "copy", "paste",
-            "list", "directory", "folder"
+            "list", "directory", "folder",
+            "open", "finder", "launch", "start",  // Added: app launching
+            "download", "fetch", "url"  // Added: web fetching
         ]
         
         // Question words and chat indicators suggest pure conversation
