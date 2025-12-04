@@ -48,6 +48,9 @@ final class AgentLoopService {
             // Apply sliding window to history
             let limitedHistory = limitHistory(history)
             
+            // Capture the last user message text for summarization
+            let lastUserMessage = limitedHistory.last(where: { $0.role == .user })?.text ?? ""
+            
             // Build initial conversation history from the thread
             var conversationHistory = ""
             for msg in limitedHistory {
@@ -104,10 +107,19 @@ final class AgentLoopService {
                     let observation = "\nObservation:\n\(result.output)\n"
                     conversationHistory += observation
                     
-                    // DO NOT stream observation to UI. Let the LLM summarize it.
-                    // onToken(observation) 
+                    // Deterministic numeric fallback: try to parse a count directly
+                    if let count = extractFirstInteger(from: result.output) {
+                        let forms = nounForms(from: lastUserMessage, toolCall: toolCall)
+                        let noun = (count == 1) ? forms.singular : forms.plural
+                        onToken("You have \(count) \(noun).")
+                        print("[AgentLoop] Deterministic count parsed, finishing.")
+                        break
+                    }
                     
-                    // Loop continues to let LLM react to observation
+                    // Summarize observation directly to the user and finish
+                    await summarizeObservation(observation: result.output, userRequest: lastUserMessage, onToken: onToken)
+                    print("[AgentLoop] Summarized observation, finishing.")
+                    break
                 } else {
                     // No tool call - this is a direct answer
                     let trimmedResponse = currentResponse.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -267,7 +279,130 @@ final class AgentLoopService {
         return ToolParser.parse(from: response, knownTools: tools.map { $0.name })
     }
     
+    private func summarizeObservation(observation: String, userRequest: String, onToken: @escaping (String) -> Void) async {
+        let system = """
+        You are Helix, summarizing tool output for the user.
+        Provide a concise, direct answer to the user's request based ONLY on the observation below.
+        Do NOT include any <tool_code> blocks, instructions, or how-to steps.
+        If the observation indicates an error, state it briefly.
+        """
+        let prompt = """
+        User request:
+        \(userRequest)
+        
+        Observation:
+        \(observation)
+        
+        Answer succinctly:
+        """
+        var _ = ""
+        do {
+            try await callLLM(prompt: prompt, systemPrompt: system, onToken: { token in
+                onToken(token)
+            })
+        } catch {
+            onToken("I ran into an issue summarizing the result.")
+            print("[AgentLoop] Summarization error: \(error)")
+        }
+    }
+    
+    private func extractFirstInteger(from text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = "(?<!\\d)(\\d+)(?!\\d)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let ns = trimmed as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = regex.firstMatch(in: trimmed, range: range) else { return nil }
+        let numberRange = match.range(at: 1)
+        guard numberRange.location != NSNotFound, let swiftRange = Range(numberRange, in: trimmed) else { return nil }
+        return Int(trimmed[swiftRange])
+    }
+    
+    private func nounForms(from userRequest: String, toolCall: ToolCall?) -> (singular: String, plural: String) {
+        // 1) Intent-based from the user request
+        let q = userRequest.lowercased()
+        if q.contains("application") || q.contains("app") { return ("application", "applications") }
+        if q.contains("document") || q.contains("doc") { return ("document", "documents") }
+        if q.contains("folder") || q.contains("directory") { return ("folder", "folders") }
+        if q.contains("image") || q.contains("photo") || q.contains("picture") { return ("image", "images") }
+        if q.contains("video") || q.contains("movie") { return ("video", "videos") }
+        if q.contains("audio") || q.contains("song") || q.contains("music") { return ("audio file", "audio files") }
+        if q.contains("pdf") { return ("PDF", "PDFs") }
+        if q.contains("archive") || q.contains("zip") { return ("archive", "archives") }
+        if q.contains("presentation") || q.contains("slides") { return ("presentation", "presentations") }
+        if q.contains("spreadsheet") || q.contains("excel") { return ("spreadsheet", "spreadsheets") }
+        if q.contains("note") || q.contains("markdown") { return ("note", "notes") }
+        if q.contains("file") { return ("file", "files") }
 
+        // 2) Tool-based heuristics (command/path/arguments)
+        if let call = toolCall {
+            let toolName = call.toolName.lowercased()
+            var haystack = ""
+
+            // Prefer strongly-typed string dictionary when available
+            if let dict = call.arguments as? [String: String] {
+                if let cmd = dict["command"] { haystack += " " + cmd.lowercased() }
+                if let path = dict["path"] { haystack += " " + path.lowercased() }
+                if let dir = dict["directory"] { haystack += " " + dir.lowercased() }
+                if let query = dict["query"] { haystack += " " + query.lowercased() }
+            } else if let dict = call.arguments as? [String: Any] {
+                // Fallback for mixed-typed dictionaries
+                if let cmd = dict["command"] { haystack += " " + String(describing: cmd).lowercased() }
+                if let path = dict["path"] { haystack += " " + String(describing: path).lowercased() }
+                if let dir = dict["directory"] { haystack += " " + String(describing: dir).lowercased() }
+                if let query = dict["query"] { haystack += " " + String(describing: query).lowercased() }
+            }
+
+            // Common locations and patterns
+            if haystack.contains("/applications") || haystack.contains("*.app") || haystack.contains(" -name \"*.app\"") {
+                return ("application", "applications")
+            }
+            if haystack.contains("/documents") {
+                return ("document", "documents")
+            }
+            if haystack.contains("/downloads") {
+                return ("file", "files")
+            }
+            if haystack.contains(" -type d") || toolName.contains("list_dir") {
+                return ("folder", "folders")
+            }
+            if haystack.contains(" -type f") {
+                return ("file", "files")
+            }
+
+            // Extension-based inference
+            let imageExts = [".jpg", ".jpeg", ".png", ".gif", ".heic", ".tiff", ".bmp", ".webp"]
+            if imageExts.contains(where: { haystack.contains($0) }) { return ("image", "images") }
+
+            let videoExts = [".mp4", ".mov", ".mkv", ".avi", ".m4v"]
+            if videoExts.contains(where: { haystack.contains($0) }) { return ("video", "videos") }
+
+            let audioExts = [".mp3", ".m4a", ".wav", ".flac", ".aiff", ".ogg"]
+            if audioExts.contains(where: { haystack.contains($0) }) { return ("audio file", "audio files") }
+
+            if haystack.contains(".pdf") { return ("PDF", "PDFs") }
+
+            let archiveExts = [".zip", ".tar", ".gz", ".rar", ".7z"]
+            if archiveExts.contains(where: { haystack.contains($0) }) { return ("archive", "archives") }
+
+            let presentationExts = [".key", ".ppt", ".pptx"]
+            if presentationExts.contains(where: { haystack.contains($0) }) { return ("presentation", "presentations") }
+
+            let spreadsheetExts = [".numbers", ".xls", ".xlsx"]
+            if spreadsheetExts.contains(where: { haystack.contains($0) }) { return ("spreadsheet", "spreadsheets") }
+
+            let noteExts = [".txt", ".rtf", ".md"]
+            if noteExts.contains(where: { haystack.contains($0) }) { return ("note", "notes") }
+        }
+
+        // 3) Default
+        return ("item", "items")
+    }
+    
+    private func nounForms(from userRequest: String) -> (singular: String, plural: String) {
+        let forms = nounForms(from: userRequest, toolCall: nil)
+        return forms
+    }
     
     /// Limit history to a safe token count (sliding window).
     private func limitHistory(_ history: [ChatMessage]) -> [ChatMessage] {
@@ -297,4 +432,5 @@ final class AgentLoopService {
         return keptMessages
     }
 }
+
 
