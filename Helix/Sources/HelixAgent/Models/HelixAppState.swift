@@ -19,7 +19,7 @@ final class HelixAppState: ObservableObject {
 
     private let llm: LLMService
     private let agentLoop: AgentLoopService
-    private let permissionManager: PermissionManager
+    let permissionManager: PermissionManager
     private var cancellables = Set<AnyCancellable>()
 
     // File on disk where threads are persisted.

@@ -17,41 +17,65 @@ final class ModelRouter {
 
     // MARK: - Routing Entry Point
     func modelName(for prompt: String) -> String {
-        let lower = prompt.lowercased()
+        // 1. Extract the latest user message if this looks like a conversation history
+        let (latestMessage, historyContext) = parsePrompt(prompt)
+        let lowerPrompt = latestMessage.lowercased()
+        let lowerHistory = historyContext.lowercased()
 
-        // 1. If it's NSFW/explicit/edgy → WizardLM Uncensored
-        if isNSFWRequest(prompt: lower) {
+        // 2. NSFW Check (Highest Priority)
+        if isNSFWRequest(prompt: lowerPrompt) {
             print("[ModelRouter] Routing → NSFW MODEL (wizardlm-uncensored)")
             return nsfw
         }
 
-        // 2. If it's REAL code or a true coding request → heavy coder
-        if isSeriousCoding(prompt: lower) {
-            print("[ModelRouter] Routing → BIG CODE MODEL")
+        // 3. Coding Check
+        // If the current prompt is about coding OR we were just coding (stickiness)
+        if isSeriousCoding(prompt: lowerPrompt) {
+            print("[ModelRouter] Routing → BIG CODE MODEL (explicit request)")
+            return bigCode
+        }
+        
+        // Stickiness: If the recent history has code blocks, stay in coding mode
+        // unless the user explicitly changes topic to something trivial.
+        if hasRecentCodeBlocks(history: lowerHistory) && !isTrivialChat(prompt: lowerPrompt) {
+            print("[ModelRouter] Routing → BIG CODE MODEL (context stickiness)")
             return bigCode
         }
 
-        // 2. If you're troubleshooting, debugging, explaining logs
-        if isDiagnostic(prompt: lower) {
+        // 4. Diagnostic/Debugging
+        if isDiagnostic(prompt: lowerPrompt) {
             print("[ModelRouter] Routing → BIG CODE MODEL (diagnostic)")
             return bigCode
         }
 
-        // 3. If you're asking a normal question, planning, chatting
-        if isGeneralChat(prompt: lower) {
+        // 5. General Chat
+        if isGeneralChat(prompt: lowerPrompt) {
             print("[ModelRouter] Routing → GENERAL CHAT (llama3)")
             return generalChat
         }
 
-        // 4. If it's short, utility, or single-step → turbo
-        if lower.count < 100 {
-            print("[ModelRouter] Routing → FAST MODEL (phi3)")
+        // 6. Fast Model for short, simple queries
+        if lowerPrompt.count < 100 && !hasRecentCodeBlocks(history: lowerHistory) {
+            print("[ModelRouter] Routing → FAST MODEL (phi3/turbo)")
             return turbo
         }
 
-        // 5. Default fallback → Llama3
+        // 7. Default fallback
         print("[ModelRouter] Routing → FALLBACK (llama3)")
         return generalChat
+    }
+
+    // MARK: - Parsing Helpers
+    
+    private func parsePrompt(_ prompt: String) -> (lastMessage: String, history: String) {
+        // Helix prompts are formatted as "User: ...\nAssistant: ...\nUser: ..."
+        // We want to split the last "User:" block from the rest.
+        let components = prompt.components(separatedBy: "User: ")
+        if let last = components.last, !last.isEmpty {
+            let history = components.dropLast().joined(separator: "User: ")
+            return (last, history)
+        }
+        return (prompt, "")
     }
 
     // MARK: - Heuristics
@@ -64,10 +88,17 @@ final class ModelRouter {
             "func ", "class ", "struct ",
             "protocol ", "extension ",
             "```", // code block
-            "return ", "init(", "var ", "let "
+            "return ", "init(", "var ", "let ",
+            "refactor", "implement", "fix", "optimize"
         ]
 
         return strongIndicators.contains(where: { prompt.contains($0) })
+    }
+    
+    private func hasRecentCodeBlocks(history: String) -> Bool {
+        // Check if the last ~1000 chars of history contain code blocks
+        let recentHistory = String(history.suffix(2000))
+        return recentHistory.contains("```")
     }
 
     private func isDiagnostic(prompt: String) -> Bool {
@@ -89,6 +120,11 @@ final class ModelRouter {
         ]
 
         return casualWords.contains(where: { prompt.contains($0) })
+    }
+    
+    private func isTrivialChat(prompt: String) -> Bool {
+        let trivialWords = ["thanks", "ok", "cool", "got it", "hello", "hi", "bye"]
+        return trivialWords.contains(where: { prompt.contains($0) }) && prompt.count < 20
     }
 
     private func isNSFWRequest(prompt: String) -> Bool {

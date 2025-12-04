@@ -15,6 +15,7 @@ struct MainWindowView: View {
 
     @EnvironmentObject var appState: HelixAppState
     @State private var input: String = ""
+    @State private var showPermissions: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,6 +64,13 @@ struct MainWindowView: View {
                     }
                     .disabled(appState.threads.count <= 1)
                     .help("Delete Chat")
+                    
+                    Divider()
+                    
+                    Button(action: { showPermissions = true }) {
+                        Image(systemName: "lock.shield")
+                    }
+                    .help("Manage Permissions")
                 }
 
                 // Generation indicator and stop button
@@ -197,6 +205,9 @@ struct MainWindowView: View {
             set: { _ in appState.currentError = nil }
         )) { error in
             Alert(title: Text("Error"), message: Text(error.localizedDescription), dismissButton: .default(Text("OK")))
+        }
+        .sheet(isPresented: $showPermissions) {
+            PermissionsView(permissionManager: appState.permissionManager)
         }
     }
 

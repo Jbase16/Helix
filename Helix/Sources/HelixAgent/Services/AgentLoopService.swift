@@ -243,61 +243,10 @@ final class AgentLoopService {
     }
     
     private func parseToolCall(from response: String) -> ToolCall? {
-        // 1. Try strict XML format first: <tool_code>tool(args)</tool_code>
-        let xmlPattern = #"<tool_code>\s*(\w+)\((.*?)\)\s*</tool_code>"#
-        if let call = extractToolCall(from: response, pattern: xmlPattern) {
-            return call
-        }
-        
-        // 2. Fallback: Look for known tool calls at the start of a line or standalone
-        // This catches cases where the model forgets the tags but writes the correct syntax.
-        // We only match if the tool name is one of our actual tools to avoid false positives.
-        let toolNames = tools.map { $0.name }.joined(separator: "|")
-        let fallbackPattern = #"(?m)^\s*(\#(toolNames))\((.*?)\)\s*$"#
-        
-        if let call = extractToolCall(from: response, pattern: fallbackPattern) {
-            print("[AgentLoop] Detected tool call without tags: \(call.toolName)")
-            return call
-        }
-        
-        // 3. Fallback: XML self-closing tag <tool arg="val" />
-        // This catches the format <write_file path="..." content="..." />
-        let selfClosingPattern = #"<(\w+)\s+(.*?)/>"#
-        if let call = extractToolCall(from: response, pattern: selfClosingPattern) {
-            print("[AgentLoop] Detected self-closing tool call: \(call.toolName)")
-            return call
-        }
-        
-        return nil
+        return ToolParser.parse(from: response, knownTools: tools.map { $0.name })
     }
     
-    private func extractToolCall(from text: String, pattern: String) -> ToolCall? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
-        let nsString = text as NSString
-        let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-        
-        guard let match = results.last else { return nil }
-        
-        let toolName = nsString.substring(with: match.range(at: 1))
-        let argsString = nsString.substring(with: match.range(at: 2))
-        
-        var arguments: [String: String] = [:]
-        
-        // Parse arguments: key="value"
-        // We use a slightly more robust regex that handles escaped quotes if needed
-        let argPattern = #"(\w+)="(.*?)""#
-        guard let argRegex = try? NSRegularExpression(pattern: argPattern, options: []) else { return nil }
-        
-        let argMatches = argRegex.matches(in: argsString, options: [], range: NSRange(location: 0, length: (argsString as NSString).length))
-        
-        for argMatch in argMatches {
-            let key = (argsString as NSString).substring(with: argMatch.range(at: 1))
-            let value = (argsString as NSString).substring(with: argMatch.range(at: 2))
-            arguments[key] = value
-        }
-        
-        return ToolCall(toolName: toolName, arguments: arguments)
-    }
+
     
     /// Limit history to a safe token count (sliding window).
     private func limitHistory(_ history: [ChatMessage]) -> [ChatMessage] {
