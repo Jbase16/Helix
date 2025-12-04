@@ -12,15 +12,14 @@ final class AgentLoopService {
     
     private let llm: LLMService
     private let tools: [Tool]
+    private let permissionManager: PermissionManager
     
     // Maximum number of turns in a single loop to prevent infinite loops.
     private let maxTurns = 10
     
-    // Cache for granted permissions (tool names)
-    private var permissionCache: Set<String> = []
-    
-    init(llm: LLMService) {
+    init(llm: LLMService, permissionManager: PermissionManager) {
         self.llm = llm
+        self.permissionManager = permissionManager
         self.tools = [
             ReadFileTool(),
             ListDirTool(),
@@ -46,9 +45,12 @@ final class AgentLoopService {
              onComplete: @escaping () -> Void) {
         
         Task {
+            // Apply sliding window to history
+            let limitedHistory = limitHistory(history)
+            
             // Build initial conversation history from the thread
             var conversationHistory = ""
-            for msg in history {
+            for msg in limitedHistory {
                 let role = msg.role == .user ? "User" : "Assistant"
                 conversationHistory += "\(role): \(msg.text)\n"
             }
@@ -140,20 +142,32 @@ final class AgentLoopService {
             return ToolResult(output: "Error: Tool '\(call.toolName)' not found.", isError: true)
         }
         
-        // Permission Check
-        // Permission Check
+        // Permission Check using PermissionManager
         if tool.requiresPermission {
-            // Check cache first
-            if tool.shouldCachePermission && permissionCache.contains(tool.name) {
-                print("[AgentLoop] Permission cached for \(tool.name)")
-            } else {
+            let status = permissionManager.checkPermission(for: call)
+            
+            switch status {
+            case .granted:
+                print("[AgentLoop] Permission granted for \(tool.name)")
+            case .denied:
+                permissionManager.logDenial(for: call)
+                return ToolResult(output: "Permission denied for '\(tool.name)'.", isError: true)
+            case .needsApproval:
                 let approved = await onRequestPermission(call)
                 if !approved {
+                    permissionManager.logDenial(for: call)
                     return ToolResult(output: "User rejected the action.", isError: true)
                 }
-                // Cache if allowed
+                // Permission granted by user - cache it if allowed
                 if tool.shouldCachePermission {
-                    permissionCache.insert(tool.name)
+                    let scope = PermissionManager.PermissionScope(
+                        toolName: tool.name,
+                        allowedPaths: nil, // Allow all paths for cacheable tools
+                        grantedAt: Date(),
+                        expiresAt: nil,
+                        sessionOnly: true // Cache only for this session
+                    )
+                    permissionManager.grantPermission(for: call, scope: scope)
                 }
             }
         }
@@ -283,6 +297,34 @@ final class AgentLoopService {
         }
         
         return ToolCall(toolName: toolName, arguments: arguments)
+    }
+    
+    /// Limit history to a safe token count (sliding window).
+    private func limitHistory(_ history: [ChatMessage]) -> [ChatMessage] {
+        let maxTokens = 8192 // Conservative limit
+        var currentTokens = 0
+        var keptMessages: [ChatMessage] = []
+        
+        // Always keep the last message (user prompt)
+        // Iterate backwards
+        for msg in history.reversed() {
+            // Rough estimation: 1 token ~= 4 chars
+            let estimated = msg.text.count / 4
+            
+            // If adding this message exceeds limit, stop
+            if currentTokens + estimated > maxTokens {
+                // If we haven't added ANY messages yet (e.g. one huge message),
+                // we keep it to ensure we have at least something.
+                if keptMessages.isEmpty {
+                    keptMessages.append(msg)
+                }
+                break
+            }
+            
+            keptMessages.insert(msg, at: 0)
+            currentTokens += estimated
+        }
+        return keptMessages
     }
 }
 

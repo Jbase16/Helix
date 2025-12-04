@@ -78,4 +78,10 @@ enum HelixError: Error, LocalizedError, Identifiable {
             return message.isEmpty ? "An unknown error occurred." : message
         }
     }
+    
+    // MARK: - Sendable
+    // We use unchecked because 'Error' existential is not strictly Sendable,
+    // but in practice we are passing standard system errors which are safe.
 }
+
+extension HelixError: @unchecked Sendable {}

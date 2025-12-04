@@ -2,80 +2,27 @@
 //  LLMService.swift
 //  Helix
 //
+//  Coordinator service that manages LLM interactions, including:
+//  - Model routing
+//  - Error recovery (retries, fallbacks)
+//  - State management
+//
 
 import Foundation
 import Combine
 import SwiftUI
 
-struct GenerateRequest: Encodable, Sendable {
-    let model: String
-    let prompt: String
-    let system: String?
-    let stream: Bool
-    let options: GenerateOptions?
-    
-    enum CodingKeys: String, CodingKey {
-        case model, prompt, system, stream, options
-    }
-    
-    nonisolated func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(model, forKey: .model)
-        try container.encode(prompt, forKey: .prompt)
-        try container.encode(system, forKey: .system)
-        try container.encode(stream, forKey: .stream)
-        try container.encode(options, forKey: .options)
-    }
-}
-
-struct GenerateOptions: Encodable, Sendable {
-    let stop: [String]?
-    let temperature: Double?
-    
-    enum CodingKeys: String, CodingKey {
-        case stop, temperature
-    }
-    
-    nonisolated func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(stop, forKey: .stop)
-        try container.encode(temperature, forKey: .temperature)
-    }
-}
-
-struct GenerateChunk: Decodable, Sendable {
-    let response: String?
-    let done: Bool?
-    
-    enum CodingKeys: String, CodingKey {
-        case response, done
-    }
-    
-    nonisolated init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.response = try container.decodeIfPresent(String.self, forKey: .response)
-        self.done = try container.decodeIfPresent(Bool.self, forKey: .done)
-    }
-}
-
 @MainActor
 final class LLMService: ObservableObject {
 
-    // MARK: - Non-isolated Helpers
-    private nonisolated func encodeRequest(_ request: GenerateRequest) throws -> Data {
-        return try JSONEncoder().encode(request)
-    }
-    
-    private nonisolated func decodeChunk(_ data: Data) throws -> GenerateChunk {
-        return try JSONDecoder().decode(GenerateChunk.self, from: data)
-    }
-
-    
     @Published var isGenerating: Bool = false
     @Published var streamedResponse: String = ""
     
-    // You still have a router, but we won't use it until we verify UI works.
     private let router = ModelRouter()
+    private let client = OllamaClient()
+    private let streamingHandler = StreamingHandler()
+    private let retryPolicy = RetryPolicy()
+    
     private var currentTask: Task<Void, Never>?
     
     // MARK: - Cancel Any In-Flight Generation
@@ -87,7 +34,7 @@ final class LLMService: ObservableObject {
     }
     
     // MARK: - Main Generate Function
-    /// Generate a response for the given prompt.  Tokens are streamed back via `onToken`.  If an error occurs, `onError` is called with a `HelixError`.  Once the generation finishes or is cancelled, `onComplete` is invoked.
+    /// Generate a response for the given prompt.
     func generate(prompt: String,
                   systemPrompt: String? = nil,
                   onToken: @escaping (String) -> Void,
@@ -106,226 +53,118 @@ final class LLMService: ObservableObject {
         streamedResponse = ""
         isGenerating = true
         
-        // Use the router to select the best model based on the prompt.
-        let modelName = router.modelName(for: trimmed)
-        print("[LLMService] Starting generation with model: \(modelName)")
+        // Use the router to select the initial model
+        let initialModel = router.modelName(for: trimmed)
+        print("[LLMService] Starting generation with model: \(initialModel)")
         
         currentTask = Task.detached { [weak self] in
             guard let self else { return }
             
-            // Client-side safety: stop markers and max response size as a backstop
-            let stopMarkers: [String] = ["<|end|>", "<|user|>", "<|assistant|>"]
-            let maxResponseCharacters: Int = 8000 // cap to prevent runaway generations
+            var currentModel = initialModel
+            var attempts = 0
+            let maxAttempts = 3
+            var lastError: HelixError?
             
-            var didTerminate = false
-            func emitError(_ error: HelixError) {
-                if didTerminate { return }
-                didTerminate = true
-                onError(error)
-            }
-            
-            defer {
-                // Capture termination state before hopping to MainActor to avoid
-                // mutating a captured var in a concurrently-executing context (Swift 6).
-                let shouldComplete = !didTerminate
-                if shouldComplete {
-                    didTerminate = true
-                }
-                Task { @MainActor in
-                    self.isGenerating = false
-                    print("[LLMService] Generation finished (defer)")
-                    if shouldComplete {
+            while attempts < maxAttempts {
+                do {
+                    try await self.performGeneration(
+                        model: currentModel,
+                        prompt: trimmed,
+                        systemPrompt: systemPrompt,
+                        onToken: onToken
+                    )
+                    // If we get here, generation succeeded
+                    await MainActor.run {
+                        self.isGenerating = false
                         onComplete()
                     }
-                }
-            }
-            
-            guard let url = URL(string: "http://127.0.0.1:11434/api/generate") else {
-                print("[LLMService] Invalid URL")
-                emitError(.unknown(message: "Invalid Ollama URL"))
-                return
-            }
-            
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            
-            let body = GenerateRequest(
-                model: modelName,
-                prompt: trimmed,
-                system: systemPrompt,
-                stream: true,
-                options: GenerateOptions(stop: ["User:", "Assistant:", "<|endoftext|>"], temperature: 0.7)
-            )
-            
-            do {
-                request.httpBody = try self.encodeRequest(body)
-            } catch {
-                print("[LLMService] Encoding error: \(error)")
-                emitError(.decoding(underlying: error))
-                return
-            }
-            
-            print("[LLMService] Request body encoded, calling Ollama…")
-            
-            // Configure a custom session with longer timeouts and connectivity waiting
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 120
-            config.timeoutIntervalForResource = 600
-            config.waitsForConnectivity = true
-            let session = URLSession(configuration: config)
-            
-            var succeeded = false
-            // Retry once on request timeout
-            for attempt in 1...2 {
-                do {
-                    let (bytes, response) = try await session.bytes(for: request)
-                    
-                    if let httpResponse = response as? HTTPURLResponse,
-                       !(200...299).contains(httpResponse.statusCode) {
-                        // Attempt to read and log the error body
-                        var errorBody = ""
-                        do {
-                            for try await line in bytes.lines {
-                                errorBody += line + "\n"
-                            }
-                        } catch {
-                            // ignore body read errors
-                        }
-                        print("[LLMService] Non-200 response: \(httpResponse.statusCode). Body: \(errorBody)")
-                        let lower = errorBody.lowercased()
-                        if lower.contains("not found") || lower.contains("no such model") || lower.contains("unable to load model") {
-                            emitError(.modelNotAvailable(modelName))
-                        } else {
-                            emitError(.invalidResponse(statusCode: httpResponse.statusCode))
-                        }
-                        return
-                    }
-                    
-                    for try await line in bytes.lines {
-                        if Task.isCancelled {
-                            emitError(.cancellation)
-                            break
-                        }
-                        guard let data = line.data(using: .utf8) else { continue }
-                        
-                        do {
-                            let chunk = try self.decodeChunk(data)
-                            
-                            if let token = chunk.response, !token.isEmpty {
-                                var tokenToEmit = token
-                                var hitStopMarker = false
-                                // If the token contains any stop marker, trim at the marker and mark to stop
-                                for marker in stopMarkers {
-                                    if let r = tokenToEmit.range(of: marker) {
-                                        tokenToEmit = String(tokenToEmit[..<r.lowerBound])
-                                        hitStopMarker = true
-                                        break
-                                    }
-                                }
-
-                                if !tokenToEmit.isEmpty {
-                                    let tokenToCapture = tokenToEmit
-                                    await MainActor.run {
-                                        self.streamedResponse += tokenToCapture
-                                        onToken(tokenToCapture)
-                                    }
-                                }
-
-                                // Enforce a max character cap as a last resort to avoid runaways
-                                let shouldStopDueToCap: Bool = await MainActor.run { self.streamedResponse.count >= maxResponseCharacters }
-                                if hitStopMarker || shouldStopDueToCap {
-                                    break
-                                }
-                            }
-
-                            if chunk.done == true { break }
-                            
-                        } catch {
-                            print("[LLMService] Chunk decode error: \(error)")
-                            emitError(.decoding(underlying: error))
-                            break
-                        }
-                    }
-                    
-                    // If we got here, streaming finished without throwing
-                    succeeded = true
-                    break
-                    
-                } catch {
-                    if Task.isCancelled {
-                        emitError(.cancellation)
-                        return
-                    }
-                    if let urlError = error as? URLError, urlError.code == .timedOut {
-                        print("[LLMService] Request timed out (attempt \(attempt)).")
-                        if attempt < 2 {
-                            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s backoff
-                            continue
-                        }
-                    }
-                    print("[LLMService] Request failed: \(error)")
-                    emitError(.network(underlying: error))
                     return
-                }
-            }
-            
-            // Fallback: if streaming did not succeed, try a non-streaming request once
-            if !succeeded {
-                var fallbackRequest = request
-                do {
-                    let fallbackBody = GenerateRequest(
-                        model: modelName,
-                        prompt: trimmed,
-                        system: systemPrompt,
-                        stream: false,
-                        options: GenerateOptions(stop: ["User:", "Assistant:", "<|endoftext|>"], temperature: 0.7)
-                    )
-                    fallbackRequest.httpBody = try self.encodeRequest(fallbackBody)
                 } catch {
-                    print("[LLMService] Encoding error (fallback): \(error)")
-                    emitError(.decoding(underlying: error))
-                    return
-                }
-                
-                do {
-                    let (data, response) = try await session.data(for: fallbackRequest)
-                    if let httpResponse = response as? HTTPURLResponse,
-                       !(200...299).contains(httpResponse.statusCode) {
-                        let bodyString = String(data: data, encoding: .utf8) ?? ""
-                        print("[LLMService] Non-200 response (fallback): \(httpResponse.statusCode). Body: \(bodyString)")
-                        let lower = bodyString.lowercased()
-                        if lower.contains("not found") || lower.contains("no such model") || lower.contains("unable to load model") {
-                            emitError(.modelNotAvailable(modelName))
-                        } else {
-                            emitError(.invalidResponse(statusCode: httpResponse.statusCode))
-                        }
-                        return
-                    }
-                    do {
-                        let chunk = try self.decodeChunk(data)
-                        if let token = chunk.response, !token.isEmpty {
-                            await MainActor.run {
-                                self.streamedResponse += token
-                                onToken(token)
-                            }
-                        }
-                    } catch {
-                        print("[LLMService] Fallback decode error: \(error)")
-                        emitError(.decoding(underlying: error))
-                        return
-                    }
-                } catch {
-                    if Task.isCancelled {
-                        emitError(.cancellation)
+                    print("[LLMService] Generation failed with model \(currentModel): \(error)")
+                    
+                    // Convert to HelixError
+                    let helixError: HelixError
+                    if let he = error as? HelixError {
+                        helixError = he
                     } else {
-                        print("[LLMService] Fallback request failed: \(error)")
-                        emitError(.network(underlying: error))
+                        helixError = .network(underlying: error)
                     }
-                    return
+                    lastError = helixError
+                    
+                    // Check for cancellation
+                    if Task.isCancelled {
+                        await MainActor.run {
+                            self.isGenerating = false
+                            onError(.cancellation)
+                        }
+                        return
+                    }
+                    
+                    // Try fallback model
+                    if let fallback = self.fallbackModel(for: currentModel) {
+                        print("[LLMService] Falling back from \(currentModel) to \(fallback)")
+                        currentModel = fallback
+                        attempts += 1
+                        continue
+                    }
+                    
+                    // No fallback available or max attempts reached
+                    break
+                }
+            }
+            
+            // If we exit the loop, we failed
+            let finalError = lastError
+            await MainActor.run {
+                self.isGenerating = false
+                if let error = finalError {
+                    onError(error)
+                } else {
+                    onError(.unknown(message: "Generation failed"))
+                }
+            }
+        }
+    }
+    
+    // MARK: - Private Helpers
+    
+    private nonisolated func fallbackModel(for model: String) -> String? {
+        switch model {
+        case "wizardlm-uncensored:13b":
+            return "dolphin-llama3"
+        case "deepseek-coder-v2:16b":
+            return "dolphin-llama3"
+        default:
+            return nil
+        }
+    }
+    
+    private func performGeneration(model: String, prompt: String, systemPrompt: String?, onToken: @escaping (String) -> Void) async throws {
+        
+        let request = GenerateRequest(
+            model: model,
+            prompt: prompt,
+            system: systemPrompt,
+            stream: true,
+            options: GenerateOptions(stop: ["User:", "Assistant:", "<|endoftext|>"], temperature: 0.7)
+        )
+        
+        // Use RetryPolicy for network operations
+        try await retryPolicy.execute {
+            let (bytes, response) = try await client.streamGeneration(request: request)
+            
+            if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+                print("[LLMService] Non-200 response: \(httpResponse.statusCode)")
+                throw HelixError.invalidResponse(statusCode: httpResponse.statusCode)
+            }
+            
+            // Process the stream
+            let _ = try await streamingHandler.processStream(bytes: bytes) { token in
+                await MainActor.run {
+                    self.streamedResponse += token
+                    onToken(token)
                 }
             }
         }
     }
 }
-
