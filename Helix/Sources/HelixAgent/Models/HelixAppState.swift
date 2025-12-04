@@ -217,8 +217,11 @@ final class HelixAppState: ObservableObject {
             "run", "execute", "command", "terminal",
             "clipboard", "copy", "paste",
             "list", "directory", "folder",
-            "open", "finder", "launch", "start",  // Added: app launching
-            "download", "fetch", "url"  // Added: web fetching
+            "open", "finder", "launch", "start",
+            "download", "fetch", "url",
+            "how many", "count", "number of",  // Counting requires tools
+            "show me", "what's in", "what is in",  // Inspection requires tools
+            "applications", "apps", "installed"  // App queries need tool access
         ]
         
         // Question words and chat indicators suggest pure conversation

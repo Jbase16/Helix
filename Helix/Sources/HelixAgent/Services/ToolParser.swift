@@ -14,19 +14,49 @@ struct ToolParser {
     /// 1. XML-wrapped: <tool_code>name(arg="val")</tool_code>
     /// 2. Function-style: name(arg="val") (at start of line)
     /// 3. XML self-closing: <name arg="val" />
+    /// 4. Malformed: <tool_code>name</tool_code>\narg="val"
     static func parse(from text: String, knownTools: [String]) -> ToolCall? {
+        // Normalize all variants of tool_code tags using regex
+        var normalizedText = text
+        
+        // Match any variation of <tool_code>, <tool code>, <tool_ code>, <tool_代码>, etc.
+        // Opening tag: <tool[_ -]?code> or <tool[_ -]?代码>
+        if let openingRegex = try? NSRegularExpression(pattern: #"<tool[_\s\-]*(code|代码|ocode)\s*>"#, options: [.caseInsensitive]) {
+            normalizedText = openingRegex.stringByReplacingMatches(
+                in: normalizedText,
+                options: [],
+                range: NSRange(normalizedText.startIndex..., in: normalizedText),
+                withTemplate: "<tool_code>"
+            )
+        }
+        
+        // Closing tag: </tool[_ -]?code> or </tool[_ -]?代码>
+        if let closingRegex = try? NSRegularExpression(pattern: #"</tool[_\s\-]*(code|代码|ocode)\s*>"#, options: [.caseInsensitive]) {
+            normalizedText = closingRegex.stringByReplacingMatches(
+                in: normalizedText,
+                options: [],
+                range: NSRange(normalizedText.startIndex..., in: normalizedText),
+                withTemplate: "</tool_code>"
+            )
+        }
+        
         // 1. Try strict XML format first (most reliable)
-        if let call = parseXMLWrapped(text) {
+        if let call = parseXMLWrapped(normalizedText) {
             return call
         }
         
-        // 2. Try self-closing XML tag
-        if let call = parseSelfClosingXML(text) {
+        // 2. Try malformed format: <tool_code>name</tool_code> followed by args
+        if let call = parseMalformedXML(normalizedText) {
             return call
         }
         
-        // 3. Fallback: Function style
-        if let call = parseFunctionStyle(text, knownTools: knownTools) {
+        // 3. Try self-closing XML tag
+        if let call = parseSelfClosingXML(normalizedText) {
+            return call
+        }
+        
+        // 4. Fallback: Function style
+        if let call = parseFunctionStyle(normalizedText, knownTools: knownTools) {
             return call
         }
         
@@ -37,9 +67,37 @@ struct ToolParser {
     
     private static func parseXMLWrapped(_ text: String) -> ToolCall? {
         // Pattern: <tool_code>name(args)</tool_code>
-        // Use dotMatchesLineSeparators to handle multi-line args
-        let pattern = #"<tool_code>\s*(\w+)\(([\s\S]*?)\)\s*</tool_code>"#
+        // Note: Chinese variants are normalized to English before reaching here
+        let pattern = #"<tool_code>\s*(\w+)\((.*?)\)\s*</tool_code>"#
         return extractCall(from: text, pattern: pattern)
+    }
+    
+    /// Parses malformed format where model puts tool name in tags but args outside:
+    /// <tool_code>run_command</tool_code>
+    /// command="open /Applications"
+    private static func parseMalformedXML(_ text: String) -> ToolCall? {
+        // Pattern: <tool_code>name</tool_code> followed by args on next line(s)
+        let pattern = #"<tool_code>\s*(\w+)\s*</tool_code>\s*\n?(.*?)(?:\n\n|$)"#
+        
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let nsString = text as NSString
+        let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+        
+        guard let match = results.last else { return nil }
+        
+        let toolName = nsString.substring(with: match.range(at: 1))
+        let argsString = nsString.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Only proceed if there are actual arguments (key="value" pattern)
+        guard argsString.contains("=") && argsString.contains("\"") else { return nil }
+        
+        let args = parseArguments(argsString)
+        
+        // Must have at least one parsed argument to be valid
+        guard !args.isEmpty else { return nil }
+        
+        print("[ToolParser] Parsed malformed format: \(toolName) with args: \(args)")
+        return ToolCall(toolName: toolName, arguments: args)
     }
     
     private static func parseFunctionStyle(_ text: String, knownTools: [String]) -> ToolCall? {
