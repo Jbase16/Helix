@@ -60,10 +60,34 @@ struct GenerateChunk: Decodable, Sendable {
     }
 }
 
+// MARK: - Chat API Models
+
+struct ChatMessageDTO: Codable, Sendable {
+    let role: String
+    let content: String
+}
+
+struct ChatRequest: Encodable, Sendable {
+    let model: String
+    let messages: [ChatMessageDTO]
+    let stream: Bool
+    let options: GenerateOptions?
+}
+
+struct ChatChunk: Decodable, Sendable {
+    let message: ChatMessageDTO?
+    let done: Bool?
+    
+    enum CodingKeys: String, CodingKey {
+        case message, done
+    }
+}
+
 // MARK: - Client
 
 actor OllamaClient {
     private let baseURL = URL(string: "http://127.0.0.1:11434/api/generate")!
+    private let chatURL = URL(string: "http://127.0.0.1:11434/api/chat")!
     private let keepAliveURL = URL(string: "http://127.0.0.1:11434/api/generate")!
     
     // Reuse a single session for all requests (faster connection reuse)
@@ -79,6 +103,15 @@ actor OllamaClient {
     
     func streamGeneration(request: GenerateRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
         var urlRequest = URLRequest(url: baseURL)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        
+        return try await session.bytes(for: urlRequest)
+    }
+    
+    func streamChat(request: ChatRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        var urlRequest = URLRequest(url: chatURL)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = try JSONEncoder().encode(request)
@@ -122,5 +155,9 @@ actor OllamaClient {
     
     nonisolated func decodeChunk(_ data: Data) throws -> GenerateChunk {
         return try JSONDecoder().decode(GenerateChunk.self, from: data)
+    }
+    
+    nonisolated func decodeChatChunk(_ data: Data) throws -> ChatChunk {
+        return try JSONDecoder().decode(ChatChunk.self, from: data)
     }
 }

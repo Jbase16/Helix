@@ -280,15 +280,13 @@ final class HelixAppState: ObservableObject {
     
     /// Route to Pure Chat for simple conversational responses (no tools).
     private func routeToPureChat(replyID: UUID, prompt: String, history: [ChatMessage]) {
-        // Build conversation context
-        var conversationHistory = ""
-        for msg in history {
-            let role = msg.role == .user ? "User" : "Assistant"
-            conversationHistory += "\(role): \(msg.text)\n"
+        // Convert internal ChatMessage to DTOs
+        var messages: [ChatMessageDTO] = history.map { msg in
+            ChatMessageDTO(role: msg.role == .user ? "user" : "assistant", content: msg.text)
         }
         
         // Add current prompt
-        conversationHistory += "User: \(prompt)\n"
+        messages.append(ChatMessageDTO(role: "user", content: prompt))
         
         // Chat-optimized system prompt (no tool instructions)
         let chatSystemPrompt = """
@@ -305,7 +303,8 @@ final class HelixAppState: ObservableObject {
         - You cannot use tools in this mode - just chat.
         """
         
-        llm.generate(prompt: conversationHistory, systemPrompt: chatSystemPrompt, onToken: { [weak self] token in
+        // Use the new chat API which handles templating correctly
+        llm.chat(messages: messages, systemPrompt: chatSystemPrompt, onToken: { [weak self] token in
             guard let self else { return }
             guard var thread = self.currentThread else { return }
             if let index = thread.messages.firstIndex(where: { $0.id == replyID }) {

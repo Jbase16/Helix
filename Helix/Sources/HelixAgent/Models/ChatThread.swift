@@ -3,6 +3,7 @@
 //  Helix
 //
 //  Represents a single conversation thread containing many chat messages.
+//  (Updated for sync)
 //
 
 import Foundation

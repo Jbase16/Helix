@@ -2,7 +2,9 @@
 //  ChatMessage.swift
 //  HelixAgent
 //
+//
 //  Represents a single message inside a chat thread.
+//  (Updated for sync)
 //
 
 import Foundation
