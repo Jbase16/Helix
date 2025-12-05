@@ -11,6 +11,11 @@ struct HelixAgentApp: App {
     // Single shared app state for the entire app
     @StateObject private var appState = HelixAppState()
 
+    // Force initialization of automation manager to react to config changes.
+    init() {
+        _ = AutomationManager.shared
+    }
+
     var body: some Scene {
         
         // Main chat window
@@ -32,7 +37,10 @@ struct HelixAgentApp: App {
         // you can tweak style if you want, but this is safe & stable:
         .menuBarExtraStyle(.window)
 
-        
-       
+        // Settings window for editing configuration
+        Settings {
+            HelixSettingsView()
+        }
+
     }
 }
