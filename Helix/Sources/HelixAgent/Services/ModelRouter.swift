@@ -133,7 +133,8 @@ final class ModelRouter {
             "adult", "edgy", "dark humor", "dark joke",
             "uncensored", "no filter", "unfiltered",
             "inappropriate", "offensive", "raunchy",
-            "profanity", "vulgar", "crude", "fuck"
+            "profanity", "vulgar", "crude", "fuck",
+            "joke", "tell me a joke" // Route all jokes to uncensored model to avoid "safe" refusals
         ]
 
         return nsfwIndicators.contains(where: { prompt.contains($0) })

@@ -303,18 +303,21 @@ final class LLMService: ObservableObject {
             
             // Custom stream processing for ChatChunk
             for try await line in bytes.lines {
+                // print("[LLMService] Raw line: \(line)") // Uncomment for extreme verbosity
                 guard let data = line.data(using: .utf8) else { continue }
                 
                 do {
                     let chunk = try await client.decodeChatChunk(data)
                     if let content = chunk.message?.content {
+                        // print("[LLMService] Token: \(content)")
                         await MainActor.run {
                             self.streamedResponse += content
                             onToken(content)
                         }
                     }
                 } catch {
-                    // Ignore JSON parse errors for partial chunks
+                    print("[LLMService] JSON Decode Error: \(error)")
+                    print("[LLMService] Failed Line: \(line)")
                     continue
                 }
             }
