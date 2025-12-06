@@ -26,11 +26,18 @@ final class AgentLoopService {
             ListDirTool(),
             RunCommandTool(),
             WriteFileTool(),
+            InstallPackageTool(),
+            ListPackagesTool(),
+            AutoReconTool(),
+            ExploitSearchTool(),
             WebSearchTool(),
             FetchURLTool(),
             VisionTool(),
             ClipboardReadTool(),
             ClipboardWriteTool(),
+            FetchBrowserContextTool(),
+            RunBrowserJavascriptTool(),
+            ExtractSessionTool(),
             GetPathsTool(),
             MemoryTool()
         ]
