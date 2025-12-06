@@ -145,6 +145,33 @@ actor BrowserService {
         
         return try await runJavaScript(dumpScript)
     }
+    
+    func navigateTo(url: String) async throws {
+        // Force open specific URL in Chrome (preferred) or Safari
+        let chromeScript = """
+        tell application "Google Chrome"
+            activate
+            open location "\(url)"
+        end tell
+        """
+        
+        if runAppleScript(chromeScript) != nil {
+            return
+        }
+        
+        let safariScript = """
+        tell application "Safari"
+            activate
+            open location "\(url)"
+        end tell
+        """
+        
+        if runAppleScript(safariScript) != nil {
+            return
+        }
+        
+        throw BrowserError.noActiveBrowser
+    }
 
     // MARK: - Helpers
     

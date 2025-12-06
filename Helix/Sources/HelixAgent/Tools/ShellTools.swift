@@ -23,6 +23,14 @@ struct RunCommandTool: Tool {
             return ToolResult(output: "Error: Missing 'command' argument.", isError: true)
         }
         
+        // Guard Rail: Prevent Agent from running internal tools as shell commands
+        let internalTools = ["nuclei_scan", "auto_recon", "verify_xss", "verify_sqli", "verify_idor", "analyze_logic", "generate_submission"]
+        let cmdName = command.components(separatedBy: " ").first ?? ""
+        
+        if internalTools.contains(cmdName) {
+            return ToolResult(output: "Error: '\(cmdName)' is an INTERNAL HELIX TOOL, not a shell command. \n\nCorrect Usage: Call it as a tool directly.\nExample: <tool_code>\(cmdName)(\(cmdName == "nuclei_scan" ? "target=\"...\"" : "..."))</tool_code>\n\nDO NOT use run_command() for this.", isError: true)
+        }
+        
         let process = Process()
         let pipe = Pipe()
         let errorPipe = Pipe()

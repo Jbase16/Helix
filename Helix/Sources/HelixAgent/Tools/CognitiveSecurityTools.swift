@@ -15,14 +15,28 @@ struct AnalyzeLogicTool: Tool {
         
         var report = "=== 🧠 COGNITIVE LOGIC ANALYSIS: \(target) ===\n"
         
-        // 1. Fetch Main HTML
-        let curlCmd = "curl -s -L --max-time 10 -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' \"\(target)\""
-        let htmlResult = try await RunCommandTool().run(arguments: ["command": curlCmd])
+        // 1. Fetch Main HTML via Headless(ish) Browser for SPA support
+        // User reported Curl failing on SPAs. We must use the BrowserService to render the DOM.
         
-        if htmlResult.isError || htmlResult.output.isEmpty {
-            return ToolResult(output: "Failed to fetch target HTML. Cannot perform analysis.", isError: true)
+        var html = ""
+        do {
+            try await BrowserService.shared.navigateTo(url: target)
+            // Wait for SPA hydration (3s)
+            try await Task.sleep(nanoseconds: 3 * 1_000_000_000)
+            
+            html = try await BrowserService.shared.runJavaScript("document.documentElement.outerHTML")
+            report += "✅ Successfully fetched RENDERED DOM from Browser (SPA Support Active).\n"
+        } catch {
+             report += "⚠️ Browser fetch failed: \(error.localizedDescription). Falling back to Curl (Static).\n"
+             // Fallback
+             let curlCmd = "curl -s -L --max-time 10 -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' \"\(target)\""
+             let htmlResult = try await RunCommandTool().run(arguments: ["command": curlCmd])
+             html = htmlResult.output
         }
-        let html = htmlResult.output
+        
+        if html.isEmpty {
+            return ToolResult(output: "Failed to fetch target HTML (Browser & Curl). Cannot perform analysis.", isError: true)
+        }
         
         report += "### 1. Secret Mining (HTML & JS)\n"
         let secrets = mineSecrets(in: html, source: "Main Page")
