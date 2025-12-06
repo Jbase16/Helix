@@ -7,6 +7,8 @@
 
 import Foundation
 
+
+
 /// Tool to run a shell command.
 struct RunCommandTool: Tool {
     let name = "run_command"
@@ -32,46 +34,58 @@ struct RunCommandTool: Tool {
         }
         
         return try await withCheckedThrowingContinuation { continuation in
-            // Execute on a background thread to avoid blocking the MainActor
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                let pipe = Pipe()
-                let errorPipe = Pipe()
+            let process = Process()
+            let pipe = Pipe()
+            let errorPipe = Pipe()
+            
+            // Thread-safe readers
+            let outputReader = PipeReader()
+            let errorReader = PipeReader()
+            
+            // Run via /bin/zsh
+            var environment = ProcessInfo.processInfo.environment
+            let currentPath = environment["PATH"] ?? ""
+            let newPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + currentPath
+            environment["PATH"] = newPath
+            process.environment = environment
+            
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-c", command]
+            process.standardOutput = pipe
+            process.standardError = errorPipe
+            
+            // Use handlers to read data safely
+            pipe.fileHandleForReading.readabilityHandler = { handle in
+                outputReader.append(handle.availableData)
+            }
+            errorPipe.fileHandleForReading.readabilityHandler = { handle in
+                errorReader.append(handle.availableData)
+            }
+            
+            process.terminationHandler = { proc in
+                // Cleanup handlers
+                pipe.fileHandleForReading.readabilityHandler = nil
+                errorPipe.fileHandleForReading.readabilityHandler = nil
                 
-                // Run via /bin/zsh
-                var environment = ProcessInfo.processInfo.environment
-                let currentPath = environment["PATH"] ?? ""
-                let newPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + currentPath
-                environment["PATH"] = newPath
-                process.environment = environment
+                // Read final accumulated data
+                let outputData = outputReader.read()
+                let errorData = errorReader.read()
                 
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                process.arguments = ["-c", command]
-                process.standardOutput = pipe
-                process.standardError = errorPipe
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+                let combined = output + (errorOutput.isEmpty ? "" : "\nSTDERR:\n\(errorOutput)")
                 
-                do {
-                    try process.run()
-                    
-                    // Read output synchronously on this background thread (which is fine)
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    
-                    process.waitUntilExit()
-                    
-                    let output = String(data: data, encoding: .utf8) ?? ""
-                    let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-                    let combined = output + (errorOutput.isEmpty ? "" : "\nSTDERR:\n\(errorOutput)")
-                    
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: ToolResult(output: combined.trimmingCharacters(in: .whitespacesAndNewlines), isError: false))
-                    } else {
-                        continuation.resume(returning: ToolResult(output: "Command failed (Exit \(process.terminationStatus)):\n\(combined)", isError: true))
-                    }
-                    
-                } catch {
-                    continuation.resume(returning: ToolResult(output: "Failed to run command: \(error.localizedDescription)", isError: true))
+                if proc.terminationStatus == 0 {
+                    continuation.resume(returning: ToolResult(output: combined.trimmingCharacters(in: .whitespacesAndNewlines), isError: false))
+                } else {
+                    continuation.resume(returning: ToolResult(output: "Command failed (Exit \(proc.terminationStatus)):\n\(combined)", isError: true))
                 }
+            }
+            
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: ToolResult(output: "Failed to run command: \(error.localizedDescription)", isError: true))
             }
         }
     }

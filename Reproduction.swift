@@ -7,77 +7,64 @@ struct ToolCall {
 
 struct ToolParser {
     static func parse(from text: String) -> ToolCall? {
-        // Current Normalization in ToolParser.swift (Step 3163)
         var normalizedText = text
             .replacingOccurrences(of: "<｜tool calls begin｜>", with: "")
             .replacingOccurrences(of: "<｜tool call begin｜>", with: "")
-            // .replacingOccurrences(of: "<｜tool sep｜>", with: "") // WAS REMOVED
-            // .replacingOccurrences(of: "function", with: "") // WAS REMOVED
         
-        print("Normalized: \n\(normalizedText)\n")
+        print("Normalized: '\(normalizedText)'")
 
         if let call = parseSpecialTokens(normalizedText) {
             return call
         }
+        
+        // Fallback to XML
+        print("Falling back to XML Check...")
+        if let call = parseXMLWrapped(normalizedText) {
+             print("XML Parsed!")
+             return call
+        }
+        
         return nil
     }
 
     private static func parseSpecialTokens(_ text: String) -> ToolCall? {
-        // Current Regex in ToolParser.swift (Step 3141)
-        let pattern = #"function<｜tool sep｜>\s*(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { 
-            print("Regex compilation failed")
-            return nil 
-        }
+        // Current Regex in ToolParser.swift (Step 3213)
+        // Missing leading \s*
+        let pattern = #"(?:function)?\s*<｜tool sep｜>\s*(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         
         let nsString = text as NSString
-        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else { 
-            print("Regex match failed")
+        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else {
+            print("SpecialTokens Regex Match Failed")
             return nil 
         }
         
         let toolName = nsString.substring(with: match.range(at: 1))
-        let argsBlock = nsString.substring(with: match.range(at: 2))
-        
-        print("Match Found: \(toolName)")
-        print("Args Block: \(argsBlock)")
-        
-        let args = parseArguments(argsBlock)
-        print("Parsed Args: \(args)")
-        
-        if !args.isEmpty {
-            return ToolCall(toolName: toolName, arguments: args)
-        }
-        
-        return nil
+        return ToolCall(toolName: toolName, arguments: [:])
     }
     
-    private static func parseArguments(_ text: String) -> [String: String] {
-        var args: [String: String] = [:]
-        let robustPattern = #"(\w+)\s*=\s*"([^"\\]*(?:\\.[^"\\]*)*)""#
-        guard let regex = try? NSRegularExpression(pattern: robustPattern, options: [.dotMatchesLineSeparators]) else { return [:] }
+    private static func parseXMLWrapped(_ text: String) -> ToolCall? {
+        let pattern = #"<tool_code>\s*(\w+)\((.*?)\)\s*</tool_code>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         let nsString = text as NSString
-        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
-        
-        for match in matches {
-            let key = nsString.substring(with: match.range(at: 1))
-            let rawValue = nsString.substring(with: match.range(at: 2))
-            args[key] = rawValue
+        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else { 
+            print("XML Regex Match Failed")
+            return nil 
         }
-        return args
+        let toolName = nsString.substring(with: match.range(at: 1))
+        return ToolCall(toolName: toolName, arguments: [:])
     }
 }
 
-// Full input string simulating model output with hallucinated output
+// User's Raw Input (Failing Case: Leading space + duplicate calls)
 let input = """
- <｜tool calls begin｜><｜tool call begin｜>function<｜tool sep｜>auto_recon
-target="https://juice-shop.herokuapp.com"
-json {} <｜tool call end｜><｜tool calls end｜>
-<｜tool outputs begin｜><｜tool output begin｜>{"status": "success", "message": "Reconnaissance on target 'https://juice-shop.herokuapp.com' has started."}<｜tool output end｜><｜tool outputs end｜>
+ <｜tool calls begin｜><｜tool call begin｜>function<｜tool sep｜>auto_recon(target="https://juice-shop.herokuapp.com")
+    The `auto_recon` tool will perform...
+    <tool_code>auto_recon(target="https://juice-shop.herokuapp.com")</tool_code>
 """
 
 if let result = ToolParser.parse(from: input) {
-    print("SUCCESS: Parsed \(result.toolName) with args \(result.arguments)")
+    print("SUCCESS: Parsed \(result.toolName)")
 } else {
     print("FAILURE: Could not parse.")
 }

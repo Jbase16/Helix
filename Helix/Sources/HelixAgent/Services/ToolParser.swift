@@ -83,8 +83,16 @@ struct ToolParser {
             return call
         }
         
-        // 5. Fallback: Function style
+        // 5. Fallback: Function style (Strict)
         if let call = parseFunctionStyle(normalizedText, knownTools: knownTools) {
+            return call
+        }
+        
+        // 6. FINAL FALLBACK: Fuzzy Search
+        // If the text contains "function_name(arg="val")" anywhere, just grab it.
+        // This is dangerous but necessary if the model's formatting is messy.
+        if let call = parseFuzzy(normalizedText, knownTools: knownTools) {
+            print("[ToolParser] Fuzzy match succeeded: \(call.toolName)")
             return call
         }
         
@@ -95,13 +103,25 @@ struct ToolParser {
     
     private static func parseSpecialTokens(_ text: String) -> ToolCall? {
         // DeepSeek/Qwen Raw Format
-        // Example: function<｜tool sep｜>auto_recon\ntarget="..."\njson {} <｜tool call end｜>
+        // Example: function<｜tool sep｜>auto_recon
+        // ALSO support: function|auto_recon (pipe) as requested/observed by user
         
-        let pattern = #"function<｜tool sep｜>\s*(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
+        // Pattern matches:
+        // 1. Optional 'function'
+        // 2. Separator: <｜tool sep｜> OR | OR ｜
+        // 3. Tool Name
+        let pattern = #".*?(?:<｜tool sep｜>|\||｜)(?:\s*)(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         
+        // Log what we are parsing to debug whitespace issues
+        print("[ToolParser] Debug: Parsing normalized text of length \(text.count)")
+        if text.count < 200 { print("[ToolParser] Debug: Content: '\(text)'") }
+        
         let nsString = text as NSString
-        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else { return nil }
+        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else {
+            print("[ToolParser] Debug: Regex match failed in parseSpecialTokens.")
+            return nil 
+        }
         
         let toolName = nsString.substring(with: match.range(at: 1))
         let argsBlock = nsString.substring(with: match.range(at: 2))
@@ -228,9 +248,45 @@ struct ToolParser {
         return args
     }
     
-    /// Parses XML attributes `key="value"`
     private static func parseAttributes(_ text: String) -> [String: String] {
         // Same logic as parseArguments
         return parseArguments(text)
+    }
+    
+    /// Scans the entire text for "known_tool(args)" pattern, ignoring all XML/Separator noise.
+    /// This is the "Nuclear Option" for parsing.
+    private static func parseFuzzy(_ text: String, knownTools: [String]) -> ToolCall? {
+        // Regex: (tool_name)\((.*?)\)
+        // We iterate through known tools to find matches
+        
+        let nsString = text as NSString
+        
+        for tool in knownTools {
+            // Flexible pattern: toolName( [whitespace] args [whitespace] )
+            let pattern = "(\(tool))\\s*\\(([\\s\\S]*?)\\)"
+            
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+                
+                // Grab the first valid match that has key="value" style args
+                for match in matches {
+                    let toolName = nsString.substring(with: match.range(at: 1))
+                    let argsBlock = nsString.substring(with: match.range(at: 2))
+                    
+                    // Validate args look like args
+                    if argsBlock.contains("=") && argsBlock.contains("\"") {
+                        let args = parseArguments(argsBlock)
+                        if !args.isEmpty {
+                            return ToolCall(toolName: toolName, arguments: args)
+                        }
+                    } else if argsBlock.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        // Handle no-arg tools like get_paths()
+                         return ToolCall(toolName: toolName, arguments: [:])
+                    }
+                }
+            }
+        }
+        
+        return nil
     }
 }

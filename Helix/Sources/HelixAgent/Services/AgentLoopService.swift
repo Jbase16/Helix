@@ -114,6 +114,7 @@ final class AgentLoopService {
                 }
                 
                 // 3. Parse for Tool Calls
+                print("DEBUG: Raw LLM Response: \n\(currentResponse)\n--END RAW--")
                 conversationHistory += "\nAssistant: \(currentResponse)\n"
                 
                 if var toolCall = parseToolCall(from: currentResponse) {

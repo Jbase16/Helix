@@ -43,9 +43,12 @@ struct AutoReconTool: Tool {
         report += "Target URL: \(webURL)\n"
         report += "Date: \(Date())\n\n"
         
-        // 1. Nmap Scan
-        report += "### 1. Network / Service Recon (Nmap)\n"
-        let nmapCmd = "nmap -Pn -sV -F \(nmapTarget)"
+        // 1. Nmap Scan (Optimized for speed)
+        report += "### 1. Network / Service Recon (Nmap Fast)\n"
+        // -F: Fast mode (top 100 ports)
+        // -T4: Aggressive timing (faster)
+        // --open: Only show open ports
+        let nmapCmd = "nmap -Pn -F -T4 --open \(nmapTarget)"
         let nmapResult = try await RunCommandTool().run(arguments: ["command": nmapCmd])
         
         if nmapResult.isError {
@@ -57,52 +60,30 @@ struct AutoReconTool: Tool {
         // Logic: Decide if Web Recon is needed
         let nmapRaw = nmapResult.output
         let hasWebPorts = nmapRaw.contains("80/tcp") || nmapRaw.contains("443/tcp") || nmapRaw.contains("8080/tcp")
-        // If nmap failed entirely, we might still want to try web recon if the user provided a URL
         let isDomain = nmapTarget.contains(".")
         
         if hasWebPorts || isDomain {
-            report += "### 2. Web Vulnerability Recon\n"
+            report += "### 2. Web Vulnerability Recon (Nuclei)\n"
             
-            // 2A. Nikto Scan
-            let checkNikto = try await RunCommandTool().run(arguments: ["command": "which nikto"])
-            if checkNikto.isError {
-                 report += "⚠️ 'nikto' not installed. Skipping.\n"
-            } else {
-                report += "#### Nikto Scan\n"
-                let niktoCmd = "nikto -h \(webURL) -maxtime 90"
-                let niktoResult = try await RunCommandTool().run(arguments: ["command": niktoCmd])
-                report += "```\n\(niktoResult.output)\n```\n"
-            }
-            
-            // 2B. Nuclei Scan
+            // 2A. Nuclei Scan (Fast & Silent)
             let checkNuclei = try await RunCommandTool().run(arguments: ["command": "which nuclei"])
             if checkNuclei.isError {
-                report += "\n⚠️ 'nuclei' not installed. Recommended for pro-level scanning. Run `install_package(name=\"nuclei\")`.\n"
+                report += "\n⚠️ 'nuclei' not installed. Run `install_package(name=\"nuclei\")`.\n"
             } else {
-                report += "\n#### Nuclei Scan\n"
-                let nucleiCmd = "nuclei -u \(webURL) -s critical,high,medium -silent"
+                // Run critical/high severity scan
+                let nucleiCmd = "nuclei -u \(webURL) -s critical,high -silent"
                 let nucleiResult = try await RunCommandTool().run(arguments: ["command": nucleiCmd])
                 if nucleiResult.output.isEmpty {
-                     report += "No critical/high/medium vulnerabilities found by Nuclei.\n"
+                     report += "No critical/high vulnerabilities found by Nuclei.\n"
                 } else {
                      report += "```\n\(nucleiResult.output)\n```\n"
                 }
             }
             
-            // 2C. Cognitive Logic Analysis
-            report += "\n### 3. Cognitive Logic Analysis (AI Engine)\n"
-            // Use the Web URL for logic analysis (it handles SPAs)
-            let logicResult = try await AnalyzeLogicTool().run(arguments: ["target": webURL])
-            if logicResult.isError {
-                report += "⚠️ Logic analysis failed: \(logicResult.output)\n"
-            } else {
-                let logicOutput = logicResult.output
-                    .replacingOccurrences(of: "=== 🧠 COGNITIVE LOGIC ANALYSIS: \(webURL) ===", with: "")
-                    .replacingOccurrences(of: "=== End Analysis ===", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                report += logicOutput + "\n"
-            }
-            
+            // 2B. Cognitive Logic Analysis (AI Engine)
+            // (Only if users asked for it explicitly? No, auto_recon implies full suite. But logic analysis uses tokens. Let's keep it but maybe it's fast enough 5-10s?)
+            // report += "\n### 3. Cognitive Logic Analysis...\n"
+            // skip for speed unless specifically requested via another tool
         } else {
             report += "### 2. Web Recon Skipped (No web ports or domain detected)\n"
         }
