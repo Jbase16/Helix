@@ -13,7 +13,7 @@ final class ModelRouter {
     private let bigCode = "deepseek-coder-v2:16b"      // smaller heavy coding & reasoning
     private let generalChat = "dolphin-llama3"      // everyday assistant
     private let turbo = "dolphin-llama3"            // hyperfast small tasks
-    private let nsfw = "dolphin-llama3"      // explicit/NSFW/edgy content
+    private let nsfw = "dolphin-mistral"      // explicit/NSFW/edgy content
     
     // MARK: - Routing Entry Point
     func modelName(for prompt: String) -> String {
@@ -36,8 +36,8 @@ final class ModelRouter {
         }
         
         // Stickiness: If the recent history has code blocks, stay in coding mode
-        // unless the user explicitly changes topic to something trivial.
-        if hasRecentCodeBlocks(history: lowerHistory) && !isTrivialChat(prompt: lowerPrompt) {
+        // unless the user explicitly changes topic to something trivial or asks for a joke.
+        if hasRecentCodeBlocks(history: lowerHistory) && !isTrivialChat(prompt: lowerPrompt) && !lowerPrompt.contains("joke") {
             print("[ModelRouter] Routing → BIG CODE MODEL (context stickiness)")
             return bigCode
         }

@@ -236,8 +236,10 @@ final class LLMService: ObservableObject {
     private nonisolated func fallbackModel(for model: String) -> String? {
         // Define fallback chain: specialized models → general → basic
         switch model {
-        case "deepseek-coder-v2:16b":
+        case "dolphin-mistral":
             return "dolphin-llama3"
+        case "deepseek-coder-v2:16b":
+            return "dolphin-mistral"
         case "dolphin-llama3":
             return "llama3"  // Try standard llama3 if dolphin variant unavailable
         case "llama3":
