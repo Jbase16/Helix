@@ -121,7 +121,7 @@ final class AgentLoopService {
                     if toolCall.toolName == "run_important_command" || toolCall.toolName == "run_essential_command" || toolCall.toolName == "execute_command" {
                         print("[AgentLoop] Mapping alias '\(toolCall.toolName)' -> 'run_command'")
                         toolCall = ToolCall(toolName: "run_command", arguments: toolCall.arguments)
-                    } else if toolCall.toolName == "auto_iam" || toolCall.toolName == "auto_exploit" || toolCall.toolName == "cognitive_pen_test" {
+                    } else if toolCall.toolName == "auto_iam" || toolCall.toolName == "auto_exploit" || toolCall.toolName == "cognitive_pen_test" || toolCall.toolName == "auto_pen_test" || toolCall.toolName == "auto_penetration_test" {
                         print("[AgentLoop] Mapping alias '\(toolCall.toolName)' -> 'auto_recon'")
                         toolCall = ToolCall(toolName: "auto_recon", arguments: toolCall.arguments)
                     }
@@ -136,7 +136,11 @@ final class AgentLoopService {
                         break
                     }
                     
-                    // 4. Execute Tool (with permission check)
+                    // 4. UI Feedback: Tell user we are running it (Before the async call blocks/waits)
+                    let statusMsg = "\n🛠️ Helix is executing: `\(toolCall.toolName)`...\n"
+                    onToken(statusMsg)
+                    
+                    // 5. Execute Tool (with permission check)
                     let result = await executeTool(toolCall, onRequestPermission: onRequestPermission)
 
                     // If the tool execution produced an error, surface it via onError and stop the loop.

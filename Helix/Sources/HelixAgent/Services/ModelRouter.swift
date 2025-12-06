@@ -28,9 +28,9 @@ final class ModelRouter {
             return nsfw
         }
 
-        // 3. Coding Check
-        // If the current prompt is about coding OR we were just coding (stickiness)
-        if isSeriousCoding(prompt: lowerPrompt) {
+        // 3. Coding or Security Check
+        // If the current prompt is about coding OR security operations (tools)
+        if isSeriousCoding(prompt: lowerPrompt) || isSecurityOperation(prompt: lowerPrompt) {
             print("[ModelRouter] Routing → BIG CODE MODEL (explicit request)")
             return bigCode
         }
@@ -125,6 +125,15 @@ final class ModelRouter {
     private func isTrivialChat(prompt: String) -> Bool {
         let trivialWords = ["thanks", "ok", "cool", "got it", "hello", "hi", "bye"]
         return trivialWords.contains(where: { prompt.contains($0) }) && prompt.count < 20
+    }
+
+    private func isSecurityOperation(prompt: String) -> Bool {
+        let opIndicators = [
+            "scan", "verify", "exploit", "hack", "penetration", "pen test",
+            "vulnerability", "xss", "sqli", "idor", "attack", "payload",
+            "nmap", "nikto", "nuclei", "recon", "cognitive", "logic"
+        ]
+        return opIndicators.contains(where: { prompt.contains($0) }) 
     }
 
     private func isNSFWRequest(prompt: String) -> Bool {

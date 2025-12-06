@@ -18,6 +18,19 @@ struct ToolParser {
     static func parse(from text: String, knownTools: [String]) -> ToolCall? {
         // Normalize all variants of tool_code tags using regex
         var normalizedText = text
+            .replacingOccurrences(of: "<｜tool calls begin｜>", with: "")
+            .replacingOccurrences(of: "<｜tool call begin｜>", with: "")
+            // DO NOT strip <｜tool sep｜> or "function" here, as parseSpecialTokens relies on them.
+        
+        // Match any variation of <tool_code>, <tool_automated_important_code>, <tool code>, etc.
+        
+        // After stripping, we might be left with just "auto_recon(...)" which parseFunctionStyle can pick up.
+        // But wait, parseFunctionStyle checks knownTools.
+        
+        // Let's re-add the "Permissive Check" for function style which is #5.
+        // If we strip "function<sep>", we get "name(args)".
+        
+        // Match any variation of <tool_code>, <tool_automated_important_code>, <tool code>, etc.
         
         // Match any variation of <tool_code>, <tool_automated_important_code>, <tool code>, etc.
         // Extremely permissive: <tool...code>
@@ -30,8 +43,18 @@ struct ToolParser {
             )
         }
         
-        // Closing tag: generic matching </tool...code> - extremely permissive
-        if let closingRegex = try? NSRegularExpression(pattern: #"</tool.*?code\s*>"#, options: [.caseInsensitive]) {
+        // Match <tool_activated> (common hallucination) -> <tool_code>
+        if let activatedRegex = try? NSRegularExpression(pattern: #"<tool.*?activated\s*>"#, options: [.caseInsensitive]) {
+            normalizedText = activatedRegex.stringByReplacingMatches(
+                in: normalizedText,
+                options: [],
+                range: NSRange(normalizedText.startIndex..., in: normalizedText),
+                withTemplate: "<tool_code>"
+            )
+        }
+        
+        // Closing tag: generic matching </tool...code> or </tool...activated>
+        if let closingRegex = try? NSRegularExpression(pattern: #"</tool.*?(?:code|activated)\s*>"#, options: [.caseInsensitive]) {
             normalizedText = closingRegex.stringByReplacingMatches(
                 in: normalizedText,
                 options: [],
@@ -55,7 +78,12 @@ struct ToolParser {
             return call
         }
         
-        // 4. Fallback: Function style
+        // 4. Try Special Tokens (DeepSeek/Qwen style)
+        if let call = parseSpecialTokens(normalizedText) {
+            return call
+        }
+        
+        // 5. Fallback: Function style
         if let call = parseFunctionStyle(normalizedText, knownTools: knownTools) {
             return call
         }
@@ -64,6 +92,30 @@ struct ToolParser {
     }
     
     // MARK: - Private Parsers
+    
+    private static func parseSpecialTokens(_ text: String) -> ToolCall? {
+        // DeepSeek/Qwen Raw Format
+        // Example: function<｜tool sep｜>auto_recon\ntarget="..."\njson {} <｜tool call end｜>
+        
+        let pattern = #"function<｜tool sep｜>\s*(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
+        
+        let nsString = text as NSString
+        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else { return nil }
+        
+        let toolName = nsString.substring(with: match.range(at: 1))
+        let argsBlock = nsString.substring(with: match.range(at: 2))
+        
+        // The args block might contain 'json {}' or just newlines with 'key="val"'
+        // We reuse parseArguments which handles key="val"
+        let args = parseArguments(argsBlock)
+        
+        if !args.isEmpty {
+            return ToolCall(toolName: toolName, arguments: args)
+        }
+        
+        return nil
+    }
     
     private static func parseXMLWrapped(_ text: String) -> ToolCall? {
         // Pattern: <tool_code>name(args)</tool_code>
@@ -127,7 +179,7 @@ struct ToolParser {
     }
     
     private static func extractCall(from text: String, pattern: String) -> ToolCall? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         let nsString = text as NSString
         let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
         
