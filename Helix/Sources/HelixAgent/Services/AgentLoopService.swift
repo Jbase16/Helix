@@ -121,7 +121,7 @@ final class AgentLoopService {
                     if toolCall.toolName == "run_important_command" || toolCall.toolName == "run_essential_command" || toolCall.toolName == "execute_command" {
                         print("[AgentLoop] Mapping alias '\(toolCall.toolName)' -> 'run_command'")
                         toolCall = ToolCall(toolName: "run_command", arguments: toolCall.arguments)
-                    } else if toolCall.toolName == "auto_iam" || toolCall.toolName == "auto_exploit" {
+                    } else if toolCall.toolName == "auto_iam" || toolCall.toolName == "auto_exploit" || toolCall.toolName == "cognitive_pen_test" {
                         print("[AgentLoop] Mapping alias '\(toolCall.toolName)' -> 'auto_recon'")
                         toolCall = ToolCall(toolName: "auto_recon", arguments: toolCall.arguments)
                     }

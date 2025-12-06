@@ -13,13 +13,23 @@ struct AutoReconTool: Tool {
              return ToolResult(output: "Error: Missing 'target' argument.", isError: true)
         }
         
-        // Sanitize target: remove protocol and trailing slashes for nmap compatibility
-        var target = targetRaw
+        // 1. Sanitize Target for NMAP (Hostname Only)
+        // Remove https/http
+        var nmapTarget = targetRaw
             .replacingOccurrences(of: "https://", with: "")
             .replacingOccurrences(of: "http://", with: "")
+        // Remove trailing path/fragments (e.g. /#/ or /index.html)
+        if let slashIndex = nmapTarget.firstIndex(of: "/") {
+            nmapTarget = String(nmapTarget[..<slashIndex])
+        }
+        // Remove bad chars that might have crept in (like trailing dots or # if no slash was present)
+        nmapTarget = nmapTarget.trimmingCharacters(in: CharacterSet(charactersIn: ".#"))
         
-        if let slashIndex = target.firstIndex(of: "/") {
-            target = String(target[..<slashIndex])
+        // 2. Prepare Target for WEB TOOLS (Full URL)
+        // Ensure it has protocol
+        var webURL = targetRaw
+        if !webURL.lowercased().hasPrefix("http") {
+             webURL = "https://" + webURL
         }
         
         // Dependency Check
@@ -29,12 +39,13 @@ struct AutoReconTool: Tool {
         }
         
         var report = "=== 🛡️ HELIX VULNERABILITY REPORT 🛡️ ===\n"
-        report += "Target: \(target)\n"
+        report += "Target Host: \(nmapTarget)\n"
+        report += "Target URL: \(webURL)\n"
         report += "Date: \(Date())\n\n"
         
-        // 1. Nmap Scan (Pro Mode: -Pn skip ping, -sV version detection, -F fast ports)
+        // 1. Nmap Scan
         report += "### 1. Network / Service Recon (Nmap)\n"
-        let nmapCmd = "nmap -Pn -sV -F \(target)"
+        let nmapCmd = "nmap -Pn -sV -F \(nmapTarget)"
         let nmapResult = try await RunCommandTool().run(arguments: ["command": nmapCmd])
         
         if nmapResult.isError {
@@ -44,10 +55,10 @@ struct AutoReconTool: Tool {
         }
         
         // Logic: Decide if Web Recon is needed
-        // If ports 80/443/8080 are open OR if the target looks like a domain (has a dot), force web recon.
         let nmapRaw = nmapResult.output
         let hasWebPorts = nmapRaw.contains("80/tcp") || nmapRaw.contains("443/tcp") || nmapRaw.contains("8080/tcp")
-        let isDomain = target.contains(".") && !target.allSatisfy({ $0.isNumber || $0 == "." }) // Simple heuristic
+        // If nmap failed entirely, we might still want to try web recon if the user provided a URL
+        let isDomain = nmapTarget.contains(".")
         
         if hasWebPorts || isDomain {
             report += "### 2. Web Vulnerability Recon\n"
@@ -58,21 +69,18 @@ struct AutoReconTool: Tool {
                  report += "⚠️ 'nikto' not installed. Skipping.\n"
             } else {
                 report += "#### Nikto Scan\n"
-                // -Tuning b (Software Identification), x (Reverse Logic) to save time, or just standard.
-                // Using standard but with timeout limiting.
-                let niktoCmd = "nikto -h \(target) -maxtime 90"
+                let niktoCmd = "nikto -h \(webURL) -maxtime 90"
                 let niktoResult = try await RunCommandTool().run(arguments: ["command": niktoCmd])
                 report += "```\n\(niktoResult.output)\n```\n"
             }
             
-            // 2B. Nuclei Scan (The "Pro" Tool)
+            // 2B. Nuclei Scan
             let checkNuclei = try await RunCommandTool().run(arguments: ["command": "which nuclei"])
             if checkNuclei.isError {
                 report += "\n⚠️ 'nuclei' not installed. Recommended for pro-level scanning. Run `install_package(name=\"nuclei\")`.\n"
             } else {
-                report += "\n#### Nuclei Scan (Critical/High/Medium)\n"
-                // Run silent scan, only output findings.
-                let nucleiCmd = "nuclei -u \(target) -s critical,high,medium -silent"
+                report += "\n#### Nuclei Scan\n"
+                let nucleiCmd = "nuclei -u \(webURL) -s critical,high,medium -silent"
                 let nucleiResult = try await RunCommandTool().run(arguments: ["command": nucleiCmd])
                 if nucleiResult.output.isEmpty {
                      report += "No critical/high/medium vulnerabilities found by Nuclei.\n"
@@ -81,15 +89,15 @@ struct AutoReconTool: Tool {
                 }
             }
             
-            // 2C. Cognitive Logic Analysis (The "Game Changer")
+            // 2C. Cognitive Logic Analysis
             report += "\n### 3. Cognitive Logic Analysis (AI Engine)\n"
-            let logicResult = try await AnalyzeLogicTool().run(arguments: ["target": target])
+            // Use the Web URL for logic analysis (it handles SPAs)
+            let logicResult = try await AnalyzeLogicTool().run(arguments: ["target": webURL])
             if logicResult.isError {
                 report += "⚠️ Logic analysis failed: \(logicResult.output)\n"
             } else {
-                // Extract only the meat from the report (skip header/footer)
                 let logicOutput = logicResult.output
-                    .replacingOccurrences(of: "=== 🧠 COGNITIVE LOGIC ANALYSIS: \(target) ===", with: "")
+                    .replacingOccurrences(of: "=== 🧠 COGNITIVE LOGIC ANALYSIS: \(webURL) ===", with: "")
                     .replacingOccurrences(of: "=== End Analysis ===", with: "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 report += logicOutput + "\n"
