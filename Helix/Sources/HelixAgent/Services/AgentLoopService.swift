@@ -303,6 +303,7 @@ final class AgentLoopService {
         - "To open Finder, execute: <tool_code>..."
         - "Here's how you can do it: ..."
         - "You can use this command: ..."
+        - Use made-up tags like <tool_automated_code> or <tool_execution>. ONLY use <tool_code>.
 
         ✅ ALWAYS DO THIS:
         - Just output the tool call directly, nothing else

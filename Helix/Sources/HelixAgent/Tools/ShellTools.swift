@@ -28,6 +28,14 @@ struct RunCommandTool: Tool {
         let errorPipe = Pipe()
         
         // Run via /bin/zsh to support pipes, wildcards, etc.
+        // Inject common PATHs to ensure brew/user tools are found
+        var environment = ProcessInfo.processInfo.environment
+        let currentPath = environment["PATH"] ?? ""
+        // Prepend common homebrew/local paths
+        let newPath = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + currentPath
+        environment["PATH"] = newPath
+        process.environment = environment
+        
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-c", command]
         process.standardOutput = pipe
