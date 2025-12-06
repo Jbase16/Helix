@@ -13,6 +13,12 @@ struct AutoReconTool: Tool {
              return ToolResult(output: "Error: Missing 'target' argument.", isError: true)
         }
         
+        // Dependency Check
+        let checkNmap = try await RunCommandTool().run(arguments: ["command": "which nmap"])
+        if checkNmap.isError {
+            return ToolResult(output: "Error: 'nmap' is not installed. Please run `install_package(name=\"nmap\")` first.", isError: true)
+        }
+        
         var report = "=== AutoRecon Report for \(target) ===\n\n"
         
         // 1. Nmap Scan (Fast scan for top ports)
@@ -32,17 +38,15 @@ struct AutoReconTool: Tool {
             report += "--- Web Ports Detected. Initiating Web Recon ---\n\n"
             
             // 2. Nikto Scan (Web Vulnerability Scanner)
-            // Note: Nikto can be slow, limiting time or using -Tuning might be wise in production, but we run standard here.
-            report += "--- Step 2: Nikto Scan ---\n"
-            // We assume nikto is installed (agent can install it if needed via package tool)
-            let niktoCmd = "nikto -h \(target) -maxtime 60" // Cap at 60s for demo responsiveness
-            let niktoResult = try await RunCommandTool().run(arguments: ["command": niktoCmd])
-            report += niktoResult.output + "\n\n"
-            
-            // 3. Gobuster (Directory Brute Force)
-            // Need a wordlist. If brew installed gobuster, usually no default wordlist is set up easily.
-            // We'll skip Gobuster for now unless we can guarantee a wordlist, or we use a simple common list.
-            // Let's stick to Nikto which is self-contained.
+            let checkNikto = try await RunCommandTool().run(arguments: ["command": "which nikto"])
+            if checkNikto.isError {
+                 report += "Warning: 'nikto' is not installed. Skipping web vulnerability scan. Please run `install_package(name=\"nikto\")` to enable this step.\n\n"
+            } else {
+                report += "--- Step 2: Nikto Scan ---\n"
+                let niktoCmd = "nikto -h \(target) -maxtime 60"
+                let niktoResult = try await RunCommandTool().run(arguments: ["command": niktoCmd])
+                report += niktoResult.output + "\n\n"
+            }
         } else {
             report += "--- No Web Ports Detected. Skipping Web Recon. ---\n"
         }
@@ -64,14 +68,13 @@ struct ExploitSearchTool: Tool {
              return ToolResult(output: "Error: Missing 'query' argument.", isError: true)
         }
         
-        // Ensure searchsploit is in path or brew installed
-        let cmd = "searchsploit \"\(query)\""
-        let result = try await RunCommandTool().run(arguments: ["command": cmd])
-        
-        if result.output.contains("command not found") {
-            return ToolResult(output: "Error: 'searchsploit' not found. Please ask me to 'install exploitdb' first.", isError: true)
+        let check = try await RunCommandTool().run(arguments: ["command": "which searchsploit"])
+        if check.isError {
+            return ToolResult(output: "Error: 'searchsploit' (Exploit-DB) is not installed. Please run `install_package(name=\"exploitdb\")` first.", isError: true)
         }
         
+        let cmd = "searchsploit \"\(query)\""
+        let result = try await RunCommandTool().run(arguments: ["command": cmd])
         return result
     }
 }
