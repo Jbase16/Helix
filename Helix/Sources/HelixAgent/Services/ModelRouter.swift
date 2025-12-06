@@ -13,8 +13,8 @@ final class ModelRouter {
     private let bigCode = "deepseek-coder-v2:16b"      // smaller heavy coding & reasoning
     private let generalChat = "dolphin-llama3"      // everyday assistant
     private let turbo = "dolphin-llama3"            // hyperfast small tasks
-    private let nsfw = "wizardlm-uncensored:13b"      // explicit/NSFW/edgy content
-
+    private let nsfw = "dolphin-llama3"      // explicit/NSFW/edgy content
+    
     // MARK: - Routing Entry Point
     func modelName(for prompt: String) -> String {
         // 1. Extract the latest user message if this looks like a conversation history
@@ -61,8 +61,8 @@ final class ModelRouter {
         }
 
         // 7. Default fallback
-        print("[ModelRouter] Routing → FALLBACK (llama3)")
-        return generalChat
+        print("[ModelRouter] Routing → FALLBACK (dolphin-llama3)")
+        return "dolphin-llama3"
     }
 
     // MARK: - Parsing Helpers

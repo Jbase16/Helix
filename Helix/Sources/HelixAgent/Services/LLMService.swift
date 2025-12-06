@@ -236,8 +236,6 @@ final class LLMService: ObservableObject {
     private nonisolated func fallbackModel(for model: String) -> String? {
         // Define fallback chain: specialized models → general → basic
         switch model {
-        case "wizardlm-uncensored:13b":
-            return "dolphin-llama3"
         case "deepseek-coder-v2:16b":
             return "dolphin-llama3"
         case "dolphin-llama3":
@@ -290,7 +288,7 @@ final class LLMService: ObservableObject {
             model: model,
             messages: finalMessages,
             stream: true,
-            options: GenerateOptions(stop: ["<|endoftext|>"], temperature: 0.7)
+            options: GenerateOptions(stop: ["<|endoftext|>"], temperature: 0.9)
         )
         
         try await retryPolicy.execute {
