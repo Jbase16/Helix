@@ -19,7 +19,7 @@ struct ChatThread: Identifiable, Codable, Hashable {
     /// The messages that belong to this thread.
     var messages: [ChatMessage]
 
-    /// Timestamp of last activity — useful for sorting in UI.
+    /// Timestamp of last activity — useful for sorting in UI.r
     var lastUpdated: Date
 
     init(

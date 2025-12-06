@@ -110,7 +110,16 @@ final class AgentLoopService {
                 // 3. Parse for Tool Calls
                 conversationHistory += "\nAssistant: \(currentResponse)\n"
                 
-                if let toolCall = parseToolCall(from: currentResponse) {
+                if var toolCall = parseToolCall(from: currentResponse) {
+                    // Sanitize/Map hallucinated tool names to valid ones
+                    if toolCall.toolName == "run_important_command" || toolCall.toolName == "run_essential_command" || toolCall.toolName == "execute_command" {
+                        print("[AgentLoop] Mapping alias '\(toolCall.toolName)' -> 'run_command'")
+                        toolCall = ToolCall(toolName: "run_command", arguments: toolCall.arguments)
+                    } else if toolCall.toolName == "auto_iam" || toolCall.toolName == "auto_exploit" {
+                        print("[AgentLoop] Mapping alias '\(toolCall.toolName)' -> 'auto_recon'")
+                        toolCall = ToolCall(toolName: "auto_recon", arguments: toolCall.arguments)
+                    }
+                    
                     print("[AgentLoop] Tool Call Detected: \(toolCall.toolName)")
 
                     // Cycle detection: if we've already executed this exact tool call (name + args), abort to prevent infinite loops.
@@ -137,12 +146,13 @@ final class AgentLoopService {
                     let observation = "\nObservation:\n\(result.output)\n"
                     conversationHistory += observation
 
-                    // Deterministic numeric fallback: try to parse a count directly
-                    if let count = extractFirstInteger(from: result.output) {
+                    // Deterministic numeric fallback: try to parse a count directly.
+                    // Only do this if the output is short (likely just a number) to avoid grabbing "Step 1" from a long report.
+                    if result.output.count < 10, let count = extractFirstInteger(from: result.output) {
                         let forms = nounForms(from: lastUserMessage, toolCall: toolCall)
                         let noun = (count == 1) ? forms.singular : forms.plural
                         onToken("You have \(count) \(noun).")
-                        print("[AgentLoop] Deterministic count parsed, finishing.")
+                        print("[AgentLoop] Deterministic count parsed for short output, finishing.")
                         break
                     }
 
@@ -306,7 +316,8 @@ final class AgentLoopService {
         TOOL USE RULES:
         - When an action is required, output the tool call directly.
         - <tool_code>run_command(command="open /Applications")</tool_code>
-        - NEVER use made-up tags like <tool_automated_code>. ONLY use <tool_code>.
+        - NEVER use made-up tags like <tool_automated_code>, <tool_important_code>. ONLY use <tool_code>.
+        - DO NOT invent tool names like 'run_important_command'. Use ONLY 'run_command'.
         - DO NOT invent tool names. Use ONLY the Available Tools listed below.
         
         SYSTEM PATHS (dynamic, do NOT guess or invent):
@@ -326,6 +337,13 @@ final class AgentLoopService {
         \(toolSchema)
         
         FORMAT: <tool_code>tool_name(arg="value")</tool_code>
+        
+        EXAMPLES:
+        - Open Finder: <tool_code>run_command(command="open /Applications")</tool_code>
+        - Create file: <tool_code>write_file(path="/path/to/file.txt", content="hello")</tool_code>
+        - Web search: <tool_code>web_search(query="latest news")</tool_code>
+        - Get known paths: <tool_code>get_paths()</tool_code>
+        - Penetration Test / Scan: <tool_code>auto_recon(target="example.com")</tool_code>
         
         Remember: Output the tool call when ACTION is needed. If EXPLANATION is needed, provide it.
 

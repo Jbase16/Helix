@@ -16,8 +16,9 @@ struct ChatBubbleView: View {
         
         // 1. Format `run_command` specifically to show the bash script
         // Pattern: <tool_code>run_command(command="...")</tool_code>
-        // We capture the command content. Handling escaped quotes specifically.
-        let runCommandPattern = #"<tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>run_command\(command="(.*)"\)</tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>"#
+        // We capture: (1) command string.
+        // Regex now supports aliases like run_important_command
+        let runCommandPattern = #"<tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>run(?:_[a-z]+)*_command\(command="(.*)"\)</tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>"#
         
         if let regex = try? NSRegularExpression(pattern: runCommandPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
             let nsString = cleanText as NSString
