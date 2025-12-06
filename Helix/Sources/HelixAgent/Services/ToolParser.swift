@@ -19,9 +19,10 @@ struct ToolParser {
         // Normalize all variants of tool_code tags using regex
         var normalizedText = text
         
-        // Match any variation of <tool_code>, <tool_automated_code>, <tool code>, etc.
-        // Opening tag: <tool[...](code|...)>
-        if let openingRegex = try? NSRegularExpression(pattern: #"<tool[_\s\-]*(automated[_\s\-]*)?(code|代码|ocode)\s*>"#, options: [.caseInsensitive]) {
+        // Match any variation of <tool_code>, <tool_automated_important_code>, <tool code>, etc.
+        // Opening tag: <tool[_ -]?.*?[_ -]?code>
+        // We catch anything starting with <tool and ending with code> roughly
+        if let openingRegex = try? NSRegularExpression(pattern: #"<tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>"#, options: [.caseInsensitive]) {
             normalizedText = openingRegex.stringByReplacingMatches(
                 in: normalizedText,
                 options: [],
@@ -30,8 +31,8 @@ struct ToolParser {
             )
         }
         
-        // Closing tag: </tool[_ -]?code> or </tool[_ -]?automated[_ -]?code>
-        if let closingRegex = try? NSRegularExpression(pattern: #"</tool[_\s\-]*(automated[_\s\-]*)?(code|代码|ocode)\s*>"#, options: [.caseInsensitive]) {
+        // Closing tag: generic matching </tool...code>
+        if let closingRegex = try? NSRegularExpression(pattern: #"</tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>"#, options: [.caseInsensitive]) {
             normalizedText = closingRegex.stringByReplacingMatches(
                 in: normalizedText,
                 options: [],

@@ -12,10 +12,67 @@ struct ChatBubbleView: View {
 
     /// Attempt to convert the message text into an attributed string using Markdown formatting.
     private var attributedText: AttributedString {
-        if let attr = try? AttributedString(markdown: message.text, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+        var cleanText = message.text
+        
+        // 1. Format `run_command` specifically to show the bash script
+        // Pattern: <tool_code>run_command(command="...")</tool_code>
+        // We capture the command content. Handling escaped quotes specifically.
+        let runCommandPattern = #"<tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>run_command\(command="(.*)"\)</tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>"#
+        
+        if let regex = try? NSRegularExpression(pattern: runCommandPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
+            let nsString = cleanText as NSString
+            let matches = regex.matches(in: cleanText, options: [], range: NSRange(location: 0, length: nsString.length))
+            
+            // Iterate in reverse to replace without invalidating ranges
+            for match in matches.reversed() {
+                let fullRange = match.range
+                if match.numberOfRanges > 1 {
+                    let commandRange = match.range(at: 1)
+                    let commandRaw = nsString.substring(with: commandRange)
+                    
+                    // Unescape quotes for display
+                    let commandClean = commandRaw
+                        .replacingOccurrences(of: "\\\"", with: "\"")
+                        .replacingOccurrences(of: "\\\\", with: "\\")
+                    
+                    let replacement = """
+                    
+                    **⚡️ Executing Shell Command:**
+                    ```bash
+                    \(commandClean)
+                    ```
+                    """
+                    cleanText = (cleanText as NSString).replacingCharacters(in: fullRange, with: replacement)
+                }
+            }
+        }
+        
+        // 2. Format generic tools nicely
+        // Pattern: <tool_code>tool_name(...)</tool_code>
+        let genericPattern = #"<tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>(\w+)\((.*?)\)</tool[_\s\-]*(?:[a-zA-Z0-9_]+[_\s\-]*)?code\s*>"#
+        
+        if let regex = try? NSRegularExpression(pattern: genericPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) {
+            // We use a simpler block replacement for generic tools if they weren't caught by the specific run_command one above
+            // (Note: The run_command regex above replaces the tag, so this won't double-match if it worked)
+            let nsString = cleanText as NSString
+            let matches = regex.matches(in: cleanText, options: [], range: NSRange(location: 0, length: nsString.length))
+            
+            for match in matches.reversed() {
+                let fullRange = match.range
+                if match.numberOfRanges > 1 {
+                    let toolNameRange = match.range(at: 1)
+                    let toolName = nsString.substring(with: toolNameRange)
+                    
+                    let replacement = "\n*⚡️ Action: Calls `\(toolName)`...*"
+                    cleanText = (cleanText as NSString).replacingCharacters(in: fullRange, with: replacement)
+                }
+            }
+        }
+        
+        if let attr = try? AttributedString(markdown: cleanText, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
             return attr
         } else {
-            return AttributedString(message.text)
+            return AttributedString(cleanText)
         }
     }
 
@@ -41,7 +98,8 @@ struct ChatBubbleView: View {
             
             VStack(alignment: .leading, spacing: 6) {
                 // Render the message body with Markdown support and text selection
-                Text(LocalizedStringKey(message.text))
+                // Render the message body with Markdown support and text selection
+                Text(attributedText)
                     .font(.body)
                     .foregroundColor(message.role == .user ? .white : .primary)
                     .textSelection(.enabled)

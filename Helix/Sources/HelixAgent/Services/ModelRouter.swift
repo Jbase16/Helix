@@ -128,6 +128,11 @@ final class ModelRouter {
     }
 
     private func isNSFWRequest(prompt: String) -> Bool {
+        // "Offensive Security" is a valid technical term, not NSFW.
+        if prompt.contains("offensive security") || prompt.contains("offensive cybersecurity") {
+            return false
+        }
+
         let nsfwIndicators = [
             "explicit", "nsfw", "dirty joke", "sexual", "sexually",
             "adult", "edgy", "dark humor", "dark joke",
