@@ -155,7 +155,8 @@ struct ToolParser {
         let nsString = text as NSString
         let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
         
-        guard let match = results.last else { return nil }
+        // Respect the first occurrence in the text to avoid later example/tool hallucinations overriding the intended call.
+        guard let match = results.first else { return nil }
         
         let toolName = nsString.substring(with: match.range(at: 1))
         let argsString = nsString.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,7 +189,8 @@ struct ToolParser {
         let nsString = text as NSString
         let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
         
-        guard let match = results.last else { return nil }
+        // Prefer the earliest match in the text.
+        guard let match = results.first else { return nil }
         
         let toolName = nsString.substring(with: match.range(at: 1))
         let argsString = nsString.substring(with: match.range(at: 2))
@@ -203,7 +205,8 @@ struct ToolParser {
         let nsString = text as NSString
         let results = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
         
-        guard let match = results.last else { return nil }
+        // Use the first match to honor the earliest tool call in the response.
+        guard let match = results.first else { return nil }
         
         let toolName = nsString.substring(with: match.range(at: 1))
         let argsContent = nsString.substring(with: match.range(at: 2))
