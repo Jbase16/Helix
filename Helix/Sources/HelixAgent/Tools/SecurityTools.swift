@@ -9,11 +9,15 @@ struct AutoReconTool: Tool {
     var shouldCachePermission: Bool { true }
     
     func run(arguments: [String : String]) async throws -> ToolResult {
+        return try await run(arguments: arguments, onStatus: nil)
+    }
+    
+    func run(arguments: [String : String], onStatus: ((String) -> Void)? = nil) async throws -> ToolResult {
         guard let targetRaw = arguments["target"] else {
              return ToolResult(output: "Error: Missing 'target' argument.", isError: true)
         }
         
-        // 1. Sanitize Target for NMAP (Hostname Only)
+        // 1. Sanitize Target for NMAP / domain-only tooling
         // Remove https/http
         var nmapTarget = targetRaw
             .replacingOccurrences(of: "https://", with: "")
@@ -33,9 +37,22 @@ struct AutoReconTool: Tool {
         }
         
         // Dependency Check
+        var missing: [String] = []
+        
         let checkNmap = try await RunCommandTool().run(arguments: ["command": "which nmap"])
         if checkNmap.isError {
-            return ToolResult(output: "Error: 'nmap' is not installed. Please run `install_package(name=\"nmap\")` first.", isError: true)
+            missing.append("nmap (install_package name=\"nmap\")")
+        }
+        let checkSubfinder = try await RunCommandTool().run(arguments: ["command": "which subfinder"])
+        if checkSubfinder.isError { missing.append("subfinder (install_package name=\"subfinder\")") }
+        let checkNaabu = try await RunCommandTool().run(arguments: ["command": "which naabu"])
+        if checkNaabu.isError { missing.append("naabu (install_package name=\"naabu\")") }
+        let checkHttpx = try await RunCommandTool().run(arguments: ["command": "which httpx"])
+        if checkHttpx.isError { missing.append("httpx (install_package name=\"httpx\")") }
+        
+        if missing.contains(where: { $0.hasPrefix("nmap") }) {
+            let list = missing.joined(separator: ", ")
+            return ToolResult(output: "Error: Missing critical dependency.\nInstall required tools: \(list)", isError: true)
         }
         
         var report = "=== 🛡️ HELIX VULNERABILITY REPORT 🛡️ ===\n"
@@ -43,13 +60,66 @@ struct AutoReconTool: Tool {
         report += "Target URL: \(webURL)\n"
         report += "Date: \(Date())\n\n"
         
-        // 1. Nmap Scan (Optimized for speed)
-        report += "### 1. Network / Service Recon (Nmap Fast)\n"
-        // -F: Fast mode (top 100 ports)
-        // -T4: Aggressive timing (faster)
-        // --open: Only show open ports
-        let nmapCmd = "nmap -Pn -F -T4 --open \(nmapTarget)"
-        let nmapResult = try await RunCommandTool().run(arguments: ["command": nmapCmd, "timeout": "120"])
+        // 0. Subdomain Enumeration (Subfinder)
+        onStatus?("subfinder")
+        report += "### 0. Subdomain Discovery (subfinder)\n"
+        var discoveredHosts: [String] = []
+        if checkSubfinder.isError {
+            report += "⚠️ subfinder not installed. Run `install_package(name=\"subfinder\")`.\n\n"
+        } else {
+            let subfinderCmd = "subfinder -silent -timeout 8 -max-time 30 -d \(nmapTarget)"
+            let subfinderResult = try await RunCommandTool().run(arguments: ["command": subfinderCmd, "timeout": "35"])
+            if subfinderResult.isError || subfinderResult.output.isEmpty {
+                report += "⚠️ Subfinder produced no output or failed.\n\n"
+            } else {
+                discoveredHosts = subfinderResult.output
+                    .split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                let limited = discoveredHosts.prefix(50).joined(separator: "\n")
+                report += "Discovered hosts (showing up to 50):\n```\n\(limited)\n```\n\n"
+            }
+        }
+        
+        // 0.5 Host Probing (naabu fast)
+        onStatus?("naabu")
+        report += "### 0.5. Port Probe (naabu)\n"
+        if checkNaabu.isError {
+            report += "⚠️ naabu not installed. Run `install_package(name=\"naabu\")`.\n\n"
+        } else {
+            let naabuCmd = "naabu -host \(nmapTarget) -p 80,443,8080,8443 -rate 1000 -timeout 3000 -exclude-cdn -silent -no-color"
+            let naabuResult = try await RunCommandTool().run(arguments: ["command": naabuCmd, "timeout": "40"])
+            if naabuResult.isError || naabuResult.output.isEmpty {
+                report += "⚠️ naabu produced no output or failed.\n\n"
+            } else {
+                report += "Open ports (naabu):\n```\n\(naabuResult.output)\n```\n\n"
+            }
+        }
+        
+        // 1. HTTP Service Probe (httpx)
+        onStatus?("httpx")
+        report += "### 1. HTTP Probe (httpx)\n"
+        if checkHttpx.isError {
+            report += "⚠️ httpx not installed. Run `install_package(name=\"httpx\")`.\n\n"
+        } else {
+            var inputTargets = [nmapTarget]
+            inputTargets.append(contentsOf: discoveredHosts)
+            inputTargets = Array(Set(inputTargets)).filter { !$0.isEmpty }
+            let joined = inputTargets.joined(separator: "\n")
+            let httpxCmd = "printf \"%s\" \"\(joined)\" | httpx -silent -status-code -title -follow-redirects -timeout 6 -no-color"
+            let httpxResult = try await RunCommandTool().run(arguments: ["command": httpxCmd, "timeout": "50"])
+            if httpxResult.isError || httpxResult.output.isEmpty {
+                report += "⚠️ httpx produced no output or failed.\n\n"
+            } else {
+                report += "Reachable HTTP services:\n```\n\(httpxResult.output)\n```\n\n"
+            }
+        }
+        
+        // 2. Nmap Scan (Optimized for speed)
+        onStatus?("nmap")
+        report += "### 2. Network / Service Recon (Nmap Fast)\n"
+        let nmapCmd = "nmap -Pn -F -T4 -n --host-timeout 45s --open \(nmapTarget)"
+        let nmapResult = try await RunCommandTool().run(arguments: ["command": nmapCmd, "timeout": "60"])
         
         if nmapResult.isError {
             report += "⚠️ Nmap Warning: \(nmapResult.output)\n\n"
@@ -63,7 +133,8 @@ struct AutoReconTool: Tool {
         let isDomain = nmapTarget.contains(".")
         
         if hasWebPorts || isDomain {
-            report += "### 2. Web Vulnerability Recon (Nuclei)\n"
+            onStatus?("nuclei")
+            report += "### 3. Web Vulnerability Recon (Nuclei)\n"
             
             // 2A. Nuclei Scan (Fast & Silent)
             let checkNuclei = try await RunCommandTool().run(arguments: ["command": "which nuclei"])
@@ -71,9 +142,9 @@ struct AutoReconTool: Tool {
                 report += "\n⚠️ 'nuclei' not installed. Run `install_package(name=\"nuclei\")`.\n"
             } else {
                 // Run critical/high severity scan
-                let nucleiCmd = "nuclei -u \(webURL) -s critical,high -silent"
+                let nucleiCmd = "NUCLEI_UPDATE_CHECK=false nuclei -u \(webURL) -s critical,high -silent -timeout 6 -duc -no-color"
                 // Nuclei can prompt for templates on first run; enforce a timeout to avoid hanging the agent.
-                let nucleiResult = try await RunCommandTool().run(arguments: ["command": nucleiCmd, "timeout": "120"])
+                let nucleiResult = try await RunCommandTool().run(arguments: ["command": nucleiCmd, "timeout": "45"])
                 if nucleiResult.output.isEmpty {
                      report += "No critical/high vulnerabilities found by Nuclei.\n"
                 } else {
@@ -90,6 +161,19 @@ struct AutoReconTool: Tool {
         }
         
         report += "\n=== End of Report ===\n"
+        
+        // Short summary
+        report += "\nSummary:\n"
+        if !missing.isEmpty {
+            report += "- Missing tools: \(missing.joined(separator: ", "))\n"
+        } else {
+            report += "- Core tooling present (nmap, subfinder, naabu, httpx"
+            if !checkNmap.isError { report += ", nuclei" }
+            report += ")\n"
+        }
+        report += "- Target: \(nmapTarget)\n"
+        report += "- Web scan: \(hasWebPorts || isDomain ? "performed" : "skipped")\n"
+        report += "- See sections above for details.\n"
         
         return ToolResult(output: report, isError: false)
     }

@@ -144,7 +144,7 @@ final class AgentLoopService {
                     onToken(statusMsg)
                     
                     // 5. Execute Tool (with permission check)
-                    let result = await executeTool(toolCall, onRequestPermission: onRequestPermission)
+                    let result = await executeTool(toolCall, onRequestPermission: onRequestPermission, onStatus: onStatus)
 
                     // If the tool execution produced an error, surface it via onError and stop the loop.
                     if result.isError {
@@ -188,7 +188,7 @@ final class AgentLoopService {
                             break
                         }
                         
-                        let result = await executeTool(fallbackCall, onRequestPermission: onRequestPermission)
+                        let result = await executeTool(fallbackCall, onRequestPermission: onRequestPermission, onStatus: onStatus)
                         if result.isError {
                             onError(.unknown(message: result.output))
                             onStatus(nil)
@@ -255,7 +255,7 @@ final class AgentLoopService {
         }
     }
     
-    private func executeTool(_ call: ToolCall, onRequestPermission: @escaping (ToolCall) async -> Bool) async -> ToolResult {
+    private func executeTool(_ call: ToolCall, onRequestPermission: @escaping (ToolCall) async -> Bool, onStatus: ((String?) -> Void)? = nil) async -> ToolResult {
         guard let tool = tools.first(where: { $0.name == call.toolName }) else {
             return ToolResult(output: "Error: Tool '\(call.toolName)' not found.", isError: true)
         }
@@ -291,7 +291,13 @@ final class AgentLoopService {
         }
         
         do {
-            return try await tool.run(arguments: call.arguments)
+            if let onStatus = onStatus {
+                return try await tool.run(arguments: call.arguments, onStatus: { status in
+                    onStatus(status)
+                })
+            } else {
+                return try await tool.run(arguments: call.arguments)
+            }
         } catch {
             return ToolResult(output: "Error executing tool: \(error.localizedDescription)", isError: true)
         }

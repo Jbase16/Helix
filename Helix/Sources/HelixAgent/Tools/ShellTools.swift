@@ -29,8 +29,9 @@ struct RunCommandTool: Tool {
         // Guard Rail: Prevent Agent from running internal tools as shell commands
         let internalTools = ["nuclei_scan", "auto_recon", "verify_xss", "verify_sqli", "verify_idor", "analyze_logic", "generate_submission"]
         let cmdName = command.components(separatedBy: " ").first ?? ""
+        let matchesInternal = internalTools.contains(cmdName) || internalTools.contains(where: { cmdName.hasPrefix("\($0)(") })
         
-        if internalTools.contains(cmdName) {
+        if matchesInternal {
             return ToolResult(output: "Error: '\(cmdName)' is an INTERNAL HELIX TOOL, not a shell command. \n\nCorrect Usage: Call it as a tool directly.\nExample: <tool_code>\(cmdName)(\(cmdName == "nuclei_scan" ? "target=\"...\"" : "..."))</tool_code>\n\nDO NOT use run_command() for this.", isError: true)
         }
         
@@ -54,7 +55,8 @@ struct RunCommandTool: Tool {
             process.environment = environment
             
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", command]
+            // Disable zsh glob expansion to avoid failures like '--script=http-vuln*' when patterns don't match.
+            process.arguments = ["-c", "set -o noglob; " + command]
             process.standardOutput = pipe
             process.standardError = errorPipe
             

@@ -40,6 +40,13 @@ protocol Tool: Sendable {
     func run(arguments: [String: String]) async throws -> ToolResult
 }
 
+// Optional status-aware execution: default implementation calls the base run.
+extension Tool {
+    func run(arguments: [String: String], onStatus: ((String) -> Void)?) async throws -> ToolResult {
+        return try await run(arguments: arguments)
+    }
+}
+
 extension Tool {
     var shouldCachePermission: Bool { false }
 }
