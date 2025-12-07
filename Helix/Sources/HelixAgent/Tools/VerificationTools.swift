@@ -59,10 +59,16 @@ struct VerifyXSSTool: Tool {
             // Wait for render (3 seconds)
             try await Task.sleep(nanoseconds: 3 * 1_000_000_000)
             
-            // Take Screenshot (Capture main screen? Or try to capture window?)
-            // Screencapture -x (mute)
+            // Resolve an app-specific artifacts directory under Application Support
+            let fm = FileManager.default
+            let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.homeDirectoryForCurrentUser
+            let artifactsDir = base.appendingPathComponent("HelixAgent/Artifacts", isDirectory: true)
+            try? fm.createDirectory(at: artifactsDir, withIntermediateDirectories: true)
+            
+            // Create a timestamped filename
             let timestamp = Int(Date().timeIntervalSince1970)
-            let path = "/Users/jason/.gemini/antigravity/brain/d61681c6-c242-4b17-9446-1722c0975873/poc_xss_\(timestamp).png"
+            let screenshotURL = artifactsDir.appendingPathComponent("poc_xss_\(timestamp).png")
+            let path = screenshotURL.path
             
             // Capture screen
             let shotCmd = "screencapture -x \"\(path)\""
@@ -169,3 +175,4 @@ struct VerifyIDORTool: Tool {
         return ToolResult(output: report, isError: false)
     }
 }
+
