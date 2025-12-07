@@ -32,7 +32,7 @@ struct GetPathsTool: Tool {
         let downloads = dir(.downloadsDirectory, fallback: home + "/Downloads")
 
         // Load current config
-        let config = HelixConfigStore.shared.config
+        let config: HelixConfig = await MainActor.run { HelixConfigStore.shared.config }
 
         struct Payload: Codable {
             let home: String

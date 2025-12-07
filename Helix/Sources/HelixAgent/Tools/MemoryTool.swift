@@ -26,36 +26,36 @@ struct MemoryTool: Tool {
         }
         switch action {
         case "remember":
-            return handleRemember(arguments: arguments)
+            return await handleRemember(arguments: arguments)
         case "recall":
-            return handleRecall(arguments: arguments)
+            return await handleRecall(arguments: arguments)
         default:
             return ToolResult(output: "Error: unsupported action '\(action)'", isError: true)
         }
     }
 
-    private func handleRemember(arguments: [String : String]) -> ToolResult {
+    private func handleRemember(arguments: [String : String]) async -> ToolResult {
         guard let bucket = arguments["bucket"], let content = arguments["content"] else {
             return ToolResult(output: "Error: 'bucket' and 'content' required for remember.", isError: true)
         }
         let tagsString = arguments["tags"] ?? ""
         let tags = tagsString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        // Use MainActor to modify memory store
-        Task { @MainActor in
+        // Perform the write on the main actor to respect HelixMemoryStore's isolation
+        await MainActor.run {
             HelixMemoryStore.shared.remember(content, in: bucket, tags: tags)
         }
         return ToolResult(output: "Memory stored in bucket '\(bucket)'.", isError: false)
     }
 
-    private func handleRecall(arguments: [String : String]) -> ToolResult {
+    private func handleRecall(arguments: [String : String]) async -> ToolResult {
         guard let bucket = arguments["bucket"] else {
             return ToolResult(output: "Error: 'bucket' required for recall.", isError: true)
         }
         let limit = Int(arguments["limit"] ?? "10") ?? 10
-        let entries: [HelixMemoryEntry] = {
-            // Access memory store on main actor
-            return HelixMemoryStore.shared.recall(bucket: bucket, limit: limit)
-        }()
+        // Read from the main actor to respect HelixMemoryStore's isolation
+        let entries: [HelixMemoryEntry] = await MainActor.run {
+            HelixMemoryStore.shared.recall(bucket: bucket, limit: limit)
+        }
         do {
             let data = try JSONEncoder().encode(entries)
             let json = String(data: data, encoding: .utf8) ?? "[]"
