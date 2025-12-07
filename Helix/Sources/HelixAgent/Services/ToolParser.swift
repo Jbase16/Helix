@@ -254,37 +254,48 @@ struct ToolParser {
     }
     
     /// Scans the entire text for "known_tool(args)" pattern, ignoring all XML/Separator noise.
-    /// This is the "Nuclear Option" for parsing.
+    /// Returns the match that appears EARLIEST in the text.
     private static func parseFuzzy(_ text: String, knownTools: [String]) -> ToolCall? {
         // Regex: (tool_name)\((.*?)\)
-        // We iterate through known tools to find matches
-        
         let nsString = text as NSString
+        var allMatches: [(range: NSRange, call: ToolCall)] = []
         
         for tool in knownTools {
             // Flexible pattern: toolName( [whitespace] args [whitespace] )
+            // Note: We use capturing group for tool name to handle casing if needed, though we passed 'tool' in.
             let pattern = "(\(tool))\\s*\\(([\\s\\S]*?)\\)"
             
             if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
                 let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
                 
-                // Grab the first valid match that has key="value" style args
                 for match in matches {
                     let toolName = nsString.substring(with: match.range(at: 1))
                     let argsBlock = nsString.substring(with: match.range(at: 2))
                     
-                    // Validate args look like args
+                    var candidateCall: ToolCall? = nil
+                    
                     if argsBlock.contains("=") && argsBlock.contains("\"") {
                         let args = parseArguments(argsBlock)
                         if !args.isEmpty {
-                            return ToolCall(toolName: toolName, arguments: args)
+                            candidateCall = ToolCall(toolName: toolName, arguments: args)
                         }
                     } else if argsBlock.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        // Handle no-arg tools like get_paths()
-                         return ToolCall(toolName: toolName, arguments: [:])
+                         candidateCall = ToolCall(toolName: toolName, arguments: [:])
+                    }
+                    
+                    if let c = candidateCall {
+                        allMatches.append((range: match.range, call: c))
                     }
                 }
             }
+        }
+        
+        // Sort by location in text to respect execution order / find the first valid call
+        allMatches.sort { $0.range.location < $1.range.location }
+        
+        if let first = allMatches.first {
+            print("[ToolParser] Fuzzy match selected: \(first.call.toolName) at index \(first.range.location)")
+            return first.call
         }
         
         return nil

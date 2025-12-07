@@ -6,65 +6,82 @@ struct ToolCall {
 }
 
 struct ToolParser {
-    static func parse(from text: String) -> ToolCall? {
-        var normalizedText = text
-            .replacingOccurrences(of: "<｜tool calls begin｜>", with: "")
-            .replacingOccurrences(of: "<｜tool call begin｜>", with: "")
-        
-        print("Normalized: '\(normalizedText)'")
+    static func parse(from text: String, knownTools: [String]) -> ToolCall? {
+        // Mocking the Fuzzy Logic only
+        return parseFuzzy(text, knownTools: knownTools)
+    }
 
-        if let call = parseSpecialTokens(normalizedText) {
-            return call
+    private static func parseFuzzy(_ text: String, knownTools: [String]) -> ToolCall? {
+        let nsString = text as NSString
+        var allMatches: [(range: NSRange, call: ToolCall)] = []
+        
+        for tool in knownTools {
+            let pattern = "(\(tool))\\s*\\(([\\s\\S]*?)\\)"
+            
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+                
+                for match in matches {
+                    let toolName = nsString.substring(with: match.range(at: 1))
+                    let argsBlock = nsString.substring(with: match.range(at: 2))
+                    
+                    var candidateCall: ToolCall? = nil
+                    
+                    if argsBlock.contains("=") && argsBlock.contains("\"") {
+                        let args = parseArguments(argsBlock)
+                        if !args.isEmpty {
+                            candidateCall = ToolCall(toolName: toolName, arguments: args)
+                        }
+                    } else if argsBlock.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                         candidateCall = ToolCall(toolName: toolName, arguments: [:])
+                    }
+                    
+                    if let c = candidateCall {
+                        allMatches.append((range: match.range, call: c))
+                    }
+                }
+            }
         }
         
-        // Fallback to XML
-        print("Falling back to XML Check...")
-        if let call = parseXMLWrapped(normalizedText) {
-             print("XML Parsed!")
-             return call
-        }
+        allMatches.sort { $0.range.location < $1.range.location }
         
+        if let first = allMatches.first {
+            print("[MockParser] Fuzzy match selected: \(first.call.toolName) at index \(first.range.location)")
+            return first.call
+        }
         return nil
     }
-
-    private static func parseSpecialTokens(_ text: String) -> ToolCall? {
-        // Current Regex in ToolParser.swift (Step 3213)
-        // Missing leading \s*
-        let pattern = #"(?:function)?\s*<｜tool sep｜>\s*(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
-        
-        let nsString = text as NSString
-        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else {
-            print("SpecialTokens Regex Match Failed")
-            return nil 
-        }
-        
-        let toolName = nsString.substring(with: match.range(at: 1))
-        return ToolCall(toolName: toolName, arguments: [:])
-    }
     
-    private static func parseXMLWrapped(_ text: String) -> ToolCall? {
-        let pattern = #"<tool_code>\s*(\w+)\((.*?)\)\s*</tool_code>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
+    private static func parseArguments(_ text: String) -> [String: String] {
+        // Simple mock parser
+        var args: [String: String] = [:]
+        let robustPattern = #"(\w+)\s*=\s*"([^"\\]*(?:\\.[^"\\]*)*)""#
+        guard let regex = try? NSRegularExpression(pattern: robustPattern, options: [.dotMatchesLineSeparators]) else { return [:] }
         let nsString = text as NSString
-        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: nsString.length)) else { 
-            print("XML Regex Match Failed")
-            return nil 
+        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
+        for match in matches {
+            let key = nsString.substring(with: match.range(at: 1))
+            let rawValue = nsString.substring(with: match.range(at: 2))
+            args[key] = rawValue
         }
-        let toolName = nsString.substring(with: match.range(at: 1))
-        return ToolCall(toolName: toolName, arguments: [:])
+        return args
     }
 }
 
-// User's Raw Input (Failing Case: Leading space + duplicate calls)
+// User's Failing Case: auto_recon followed by hallucinated run_command
 let input = """
- <｜tool calls begin｜><｜tool call begin｜>function<｜tool sep｜>auto_recon(target="https://juice-shop.herokuapp.com")
-    The `auto_recon` tool will perform...
-    <tool_code>auto_recon(target="https://juice-shop.herokuapp.com")</tool_code>
+Okay, I will start.
+
+auto_recon(target="https://juice-shop.herokuapp.com")
+
+For example, I could also use run_command(command="ls") but I won't.
 """
 
-if let result = ToolParser.parse(from: input) {
-    print("SUCCESS: Parsed \(result.toolName)")
+// Order mimics AgentLoopService: RunCommand is EARLY, AutoRecon is LATE
+let knownTools = ["run_command", "auto_recon", "read_file"]
+
+if let result = ToolParser.parse(from: input, knownTools: knownTools) {
+    print("SUCCESS: Parsed \(result.toolName). Expected: auto_recon")
 } else {
     print("FAILURE: Could not parse.")
 }

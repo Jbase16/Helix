@@ -54,6 +54,8 @@ struct RunCommandTool: Tool {
             process.standardOutput = pipe
             process.standardError = errorPipe
             
+            print("[RunCommandTool] DEBUG: Executing: \(command)")
+            
             // Use handlers to read data safely
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 outputReader.append(handle.availableData)
