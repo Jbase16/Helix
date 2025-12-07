@@ -13,7 +13,7 @@ enum BrowserError: LocalizedError {
     }
 }
 
-actor BrowserService {
+@MainActor final class BrowserService {
     
     static let shared = BrowserService()
     
@@ -204,3 +204,4 @@ actor BrowserService {
                   .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
+
