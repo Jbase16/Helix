@@ -176,6 +176,33 @@ final class AgentLoopService {
                     print("[AgentLoop] Summarized observation, finishing.")
                     break
                 } else {
+                    // No tool call parsed. Try a fallback: if the last user message requested auto_recon with a target, synthesize the call.
+                    if let fallbackCall = fallbackAutoRecon(from: limitedHistory) {
+                        print("[AgentLoop] Fallback: executing auto_recon from user request.")
+                        onStatus("Running \(fallbackCall.toolName)...")
+                        
+                        let callKey = fallbackCall.toolName + "|" + fallbackCall.arguments.description
+                        if executedCalls.contains(callKey) {
+                            print("[AgentLoop] Detected repeated fallback tool call, aborting to prevent infinite loop: \(callKey)")
+                            onError(.unknown(message: "Detected repeated tool call \(fallbackCall.toolName). Aborting to avoid infinite loop."))
+                            break
+                        }
+                        
+                        let result = await executeTool(fallbackCall, onRequestPermission: onRequestPermission)
+                        if result.isError {
+                            onError(.unknown(message: result.output))
+                            onStatus(nil)
+                            break
+                        }
+                        executedCalls.insert(callKey)
+                        let observation = "\nObservation:\n\(result.output)\n"
+                        conversationHistory += observation
+                        await summarizeObservation(observation: result.output, userRequest: lastUserMessage, onToken: onToken)
+                        onStatus(nil)
+                        print("[AgentLoop] Fallback observation summarized, finishing.")
+                        break
+                    }
+                    
                     // No tool call - this is a direct answer
                     let trimmedResponse = currentResponse.trimmingCharacters(in: .whitespacesAndNewlines)
                     
@@ -495,6 +522,50 @@ final class AgentLoopService {
     private func nounForms(from userRequest: String) -> (singular: String, plural: String) {
         let forms = nounForms(from: userRequest, toolCall: nil)
         return forms
+    }
+    
+    /// If the last user message explicitly (or implicitly) asked for recon on a target, construct the tool call even if the model failed to emit it.
+    private func fallbackAutoRecon(from history: [ChatMessage]) -> ToolCall? {
+        guard let userMsg = history.last(where: { $0.role == .user })?.text else { return nil }
+        
+        // 1) Explicit tool syntax: auto_recon(target="...")
+        let explicitPatterns = [
+            #"auto_recon\s*\(\s*target\s*=\s*"([^"]+)""#,
+            #"auto_recon\s*\(\s*target\s*=\s*'([^']+)'"#
+        ]
+        for pattern in explicitPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+               let match = regex.firstMatch(in: userMsg, range: NSRange(userMsg.startIndex..., in: userMsg)),
+               match.numberOfRanges >= 2,
+               let range = Range(match.range(at: 1), in: userMsg) {
+                let target = String(userMsg[range])
+                return ToolCall(toolName: "auto_recon", arguments: ["target": target])
+            }
+        }
+        
+        // 2) Implicit intent: any URL/domain + recon/scan keywords.
+        let lowered = userMsg.lowercased()
+        let reconKeywords = ["recon", "scan", "pentest", "penetration", "bug bounty", "enumerate", "nmap", "nuclei", "probe"]
+        let hasReconIntent = reconKeywords.contains { lowered.contains($0) }
+        
+        // URL or bare domain
+        let urlPattern = #"https?://[A-Za-z0-9._\-/:#?=&%]+"#
+        let domainPattern = #"\b([A-Za-z0-9_\-]+\.[A-Za-z]{2,})(?:/[^\s]*)?"#
+        let patterns = [urlPattern, domainPattern]
+        
+        if hasReconIntent {
+            for pattern in patterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                   let match = regex.firstMatch(in: userMsg, range: NSRange(userMsg.startIndex..., in: userMsg)),
+                   match.numberOfRanges >= 1,
+                   let range = Range(match.range(at: 0), in: userMsg) {
+                    let target = String(userMsg[range])
+                    return ToolCall(toolName: "auto_recon", arguments: ["target": target])
+                }
+            }
+        }
+        
+        return nil
     }
     
     /// Limit history to a safe token count (sliding window).
