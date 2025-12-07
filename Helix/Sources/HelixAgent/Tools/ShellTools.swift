@@ -15,7 +15,7 @@ struct RunCommandTool: Tool {
     let description = "Executes a shell command on the system. Use with caution."
     let usageSchema = """
     <tool_code>
-    run_command(command="<command_string>")
+    run_command(command="<command_string>", timeout="<seconds_optional>")
     </tool_code>
     """
     let requiresPermission = true
@@ -24,6 +24,7 @@ struct RunCommandTool: Tool {
         guard let command = arguments["command"] else {
             return ToolResult(output: "Error: Missing 'command' argument.", isError: true)
         }
+        let timeoutSeconds = Double(arguments["timeout"] ?? "")
         
         // Guard Rail: Prevent Agent from running internal tools as shell commands
         let internalTools = ["nuclei_scan", "auto_recon", "verify_xss", "verify_sqli", "verify_idor", "analyze_logic", "generate_submission"]
@@ -41,6 +42,9 @@ struct RunCommandTool: Tool {
             // Thread-safe readers
             let outputReader = PipeReader()
             let errorReader = PipeReader()
+            let stateQueue = DispatchQueue(label: "com.helix.runcommand.state")
+            var didResume = false
+            var timedOut = false
             
             // Run via /bin/zsh
             var environment = ProcessInfo.processInfo.environment
@@ -64,10 +68,47 @@ struct RunCommandTool: Tool {
                 errorReader.append(handle.availableData)
             }
             
+            var timeoutTask: Task<Void, Never>?
+            let cancelTimeoutTask: () -> Void = {
+                stateQueue.sync {
+                    timeoutTask?.cancel()
+                }
+            }
+            let markTimedOut: () -> Void = {
+                stateQueue.sync { timedOut = true }
+            }
+            let isTimedOut: () -> Bool = {
+                stateQueue.sync { timedOut }
+            }
+            
+            if let timeoutSeconds, timeoutSeconds > 0 {
+                timeoutTask = Task {
+                    try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                    guard process.isRunning else { return }
+                    markTimedOut()
+                    process.interrupt()
+                    // Fallback terminate if still alive shortly after.
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                        if process.isRunning {
+                            process.terminate()
+                        }
+                    }
+                }
+            }
+            
+            let finalize: (ToolResult) -> Void = { result in
+                stateQueue.sync {
+                    guard !didResume else { return }
+                    didResume = true
+                    continuation.resume(returning: result)
+                }
+            }
+            
             process.terminationHandler = { proc in
                 // Cleanup handlers
                 pipe.fileHandleForReading.readabilityHandler = nil
                 errorPipe.fileHandleForReading.readabilityHandler = nil
+                cancelTimeoutTask()
                 
                 // Read final accumulated data
                 let outputData = outputReader.read()
@@ -77,17 +118,23 @@ struct RunCommandTool: Tool {
                 let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
                 let combined = output + (errorOutput.isEmpty ? "" : "\nSTDERR:\n\(errorOutput)")
                 
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: ToolResult(output: combined.trimmingCharacters(in: .whitespacesAndNewlines), isError: false))
+                let didTimeOut = isTimedOut()
+                
+                if proc.terminationStatus == 0 && !didTimeOut {
+                    finalize(ToolResult(output: combined.trimmingCharacters(in: .whitespacesAndNewlines), isError: false))
+                } else if didTimeOut {
+                    let msg = "Command timed out after \(timeoutSeconds ?? 0) seconds.\n\(combined)"
+                    finalize(ToolResult(output: msg.trimmingCharacters(in: .whitespacesAndNewlines), isError: true))
                 } else {
-                    continuation.resume(returning: ToolResult(output: "Command failed (Exit \(proc.terminationStatus)):\n\(combined)", isError: true))
+                    finalize(ToolResult(output: "Command failed (Exit \(proc.terminationStatus)):\n\(combined)", isError: true))
                 }
             }
             
             do {
                 try process.run()
             } catch {
-                continuation.resume(returning: ToolResult(output: "Failed to run command: \(error.localizedDescription)", isError: true))
+                timeoutTask?.cancel()
+                finalize(ToolResult(output: "Failed to run command: \(error.localizedDescription)", isError: true))
             }
         }
     }

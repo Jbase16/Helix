@@ -95,7 +95,11 @@ enum BrowserError: LocalizedError {
         let chromeScript = """
         tell application "Google Chrome"
             if it is running and (count of windows) > 0 then
-                execute active tab of front window javascript "\(escapedJS)"
+                tell front window
+                    tell active tab
+                        execute javascript "\(escapedJS)"
+                    end tell
+                end tell
             end if
         end tell
         """
@@ -147,11 +151,13 @@ enum BrowserError: LocalizedError {
     }
     
     func navigateTo(url: String) async throws {
+        let escapedURL = escapeForAppleScript(url)
+
         // Force open specific URL in Chrome (preferred) or Safari
         let chromeScript = """
         tell application "Google Chrome"
             activate
-            open location "\(url)"
+            open location "\(escapedURL)"
         end tell
         """
         
@@ -162,7 +168,7 @@ enum BrowserError: LocalizedError {
         let safariScript = """
         tell application "Safari"
             activate
-            open location "\(url)"
+            open location "\(escapedURL)"
         end tell
         """
         

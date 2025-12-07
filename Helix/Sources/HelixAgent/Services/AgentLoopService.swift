@@ -58,7 +58,8 @@ final class AgentLoopService {
              onToken: @escaping (String) -> Void,
              onRequestPermission: @escaping (ToolCall) async -> Bool,
              onError: @escaping (HelixError) -> Void,
-             onComplete: @escaping () -> Void) {
+             onComplete: @escaping () -> Void,
+             onStatus: @escaping (String?) -> Void) {
         
         Task {
             // Apply sliding window to history
@@ -128,6 +129,7 @@ final class AgentLoopService {
                     }
                     
                     print("[AgentLoop] Tool Call Detected: \(toolCall.toolName)")
+                    onStatus("Running \(toolCall.toolName)...")
 
                     // Cycle detection: if we've already executed this exact tool call (name + args), abort to prevent infinite loops.
                     let callKey = toolCall.toolName + "|" + toolCall.arguments.description
@@ -147,6 +149,7 @@ final class AgentLoopService {
                     // If the tool execution produced an error, surface it via onError and stop the loop.
                     if result.isError {
                         onError(.unknown(message: result.output))
+                        onStatus(nil)
                         break
                     }
 
@@ -169,6 +172,7 @@ final class AgentLoopService {
 
                     // Summarize observation directly to the user and finish
                     await summarizeObservation(observation: result.output, userRequest: lastUserMessage, onToken: onToken)
+                    onStatus(nil)
                     print("[AgentLoop] Summarized observation, finishing.")
                     break
                 } else {
@@ -189,11 +193,13 @@ final class AgentLoopService {
                         }
                     }
                     
+                    onStatus(nil)
                     print("[AgentLoop] Direct answer provided, finishing.")
                     break
                 }
             }
             
+            onStatus(nil)
             onComplete()
         }
     }
@@ -519,5 +525,3 @@ final class AgentLoopService {
         return keptMessages
     }
 }
-
-

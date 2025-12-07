@@ -49,7 +49,7 @@ struct AutoReconTool: Tool {
         // -T4: Aggressive timing (faster)
         // --open: Only show open ports
         let nmapCmd = "nmap -Pn -F -T4 --open \(nmapTarget)"
-        let nmapResult = try await RunCommandTool().run(arguments: ["command": nmapCmd])
+        let nmapResult = try await RunCommandTool().run(arguments: ["command": nmapCmd, "timeout": "120"])
         
         if nmapResult.isError {
             report += "⚠️ Nmap Warning: \(nmapResult.output)\n\n"
@@ -72,7 +72,8 @@ struct AutoReconTool: Tool {
             } else {
                 // Run critical/high severity scan
                 let nucleiCmd = "nuclei -u \(webURL) -s critical,high -silent"
-                let nucleiResult = try await RunCommandTool().run(arguments: ["command": nucleiCmd])
+                // Nuclei can prompt for templates on first run; enforce a timeout to avoid hanging the agent.
+                let nucleiResult = try await RunCommandTool().run(arguments: ["command": nucleiCmd, "timeout": "120"])
                 if nucleiResult.output.isEmpty {
                      report += "No critical/high vulnerabilities found by Nuclei.\n"
                 } else {

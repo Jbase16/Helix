@@ -13,6 +13,9 @@ final class HelixAppState: ObservableObject {
 
     /// Whether the LLM is currently generating output.
     @Published var isProcessing: Bool = false
+    
+    /// Human-readable status for long-running tool actions.
+    @Published var activityMessage: String?
 
     /// Any error produced by the model or network.  When set, the UI should present an alert.
     @Published var currentError: HelixError?
@@ -260,6 +263,10 @@ final class HelixAppState: ObservableObject {
     
     /// Route to Agent Loop for tool-enabled responses.
     private func routeToAgentLoop(replyID: UUID, history: [ChatMessage]) {
+        // Show busy state while the agent loop runs tools.
+        isProcessing = true
+        activityMessage = "Preparing tool actions..."
+        
         agentLoop.run(history: history, onToken: { [weak self] token in
             guard let self else { return }
             guard var thread = self.currentThread else { return }
@@ -277,9 +284,18 @@ final class HelixAppState: ObservableObject {
         }, onError: { [weak self] error in
             Task { @MainActor in
                 self?.currentError = error
+                self?.activityMessage = nil
+                self?.isProcessing = false
             }
         }, onComplete: { [weak self] in
+            self?.activityMessage = nil
+            self?.isProcessing = false
             self?.save()
+        }, onStatus: { [weak self] status in
+            Task { @MainActor in
+                self?.activityMessage = status
+                self?.isProcessing = status != nil
+            }
         })
     }
     
@@ -346,4 +362,3 @@ final class HelixAppState: ObservableObject {
         }
     }
 }
-

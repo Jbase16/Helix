@@ -78,11 +78,15 @@ struct MainWindowView: View {
                     HStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.7)
+                        Text(appState.activityMessage ?? "Working…")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                         Button("Stop") {
                             appState.cancelGeneration()
                         }
                         .keyboardShortcut(.escape, modifiers: [])
                     }
+                    .padding(.leading, 8)
                 }
             }
             .padding()
@@ -234,4 +238,3 @@ struct MainWindowView_Previews: PreviewProvider {
         }
     }
 }
-

@@ -22,6 +22,27 @@ struct ToolParser {
             .replacingOccurrences(of: "<｜tool call begin｜>", with: "")
             // DO NOT strip <｜tool sep｜> or "function" here, as parseSpecialTokens relies on them.
         
+        // Normalize common U+2581 separators to spaces so downstream regexes match.
+        normalizedText = normalizedText.replacingOccurrences(of: "\u{2581}", with: " ")
+        
+        // Also strip variants of the tool-call wrappers that may contain U+2581 or other whitespace.
+        if let callsBeginRegex = try? NSRegularExpression(pattern: #"<｜tool\s*calls\s*begin｜>"#, options: [.caseInsensitive]) {
+            normalizedText = callsBeginRegex.stringByReplacingMatches(
+                in: normalizedText,
+                options: [],
+                range: NSRange(normalizedText.startIndex..., in: normalizedText),
+                withTemplate: ""
+            )
+        }
+        if let callBeginRegex = try? NSRegularExpression(pattern: #"<｜tool\s*call\s*begin｜>"#, options: [.caseInsensitive]) {
+            normalizedText = callBeginRegex.stringByReplacingMatches(
+                in: normalizedText,
+                options: [],
+                range: NSRange(normalizedText.startIndex..., in: normalizedText),
+                withTemplate: ""
+            )
+        }
+        
         // Match any variation of <tool_code>, <tool_automated_important_code>, <tool code>, etc.
         
         // After stripping, we might be left with just "auto_recon(...)" which parseFunctionStyle can pick up.
@@ -63,23 +84,23 @@ struct ToolParser {
             )
         }
         
-        // 1. Try strict XML format first (most reliable)
+        // 1. Try Special Tokens (DeepSeek/Qwen style) first to avoid later XML examples overshadowing them.
+        if let call = parseSpecialTokens(normalizedText) {
+            return call
+        }
+        
+        // 2. Try strict XML format
         if let call = parseXMLWrapped(normalizedText) {
             return call
         }
         
-        // 2. Try malformed format: <tool_code>name</tool_code> followed by args
+        // 3. Try malformed format: <tool_code>name</tool_code> followed by args
         if let call = parseMalformedXML(normalizedText) {
             return call
         }
         
-        // 3. Try self-closing XML tag
+        // 4. Try self-closing XML tag
         if let call = parseSelfClosingXML(normalizedText) {
-            return call
-        }
-        
-        // 4. Try Special Tokens (DeepSeek/Qwen style)
-        if let call = parseSpecialTokens(normalizedText) {
             return call
         }
         
@@ -110,7 +131,10 @@ struct ToolParser {
         // 1. Optional 'function'
         // 2. Separator: <｜tool sep｜> OR | OR ｜
         // 3. Tool Name
-        let pattern = #".*?(?:<｜tool sep｜>|\||｜)(?:\s*)(\w+)([\s\S]*?)(?:<｜tool call end｜>|$)"#
+        // Some models emit U+2581 (▁) instead of spaces inside the special tokens.
+        // Allow either whitespace or ▁ between segments so we can still parse DeepSeek/Qwen outputs.
+        let ws = #"[ \t\r\n\u{2581}]"#
+        let pattern = #".*?(?:<｜tool\#(ws)sep｜>|\||｜)(?:\s*)(\w+)([\s\S]*?)(?:<｜tool\#(ws)call\#(ws)end｜>|$)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         
         // Log what we are parsing to debug whitespace issues
@@ -128,10 +152,16 @@ struct ToolParser {
         
         // The args block might contain 'json {}' or just newlines with 'key="val"'
         // We reuse parseArguments which handles key="val"
-        let args = parseArguments(argsBlock)
+        let cleanedArgsBlock = argsBlock.replacingOccurrences(of: "```", with: "")
+        let args = parseArguments(cleanedArgsBlock)
         
         if !args.isEmpty {
             return ToolCall(toolName: toolName, arguments: args)
+        }
+        
+        // If we got a tool name but couldn't parse args (e.g., missing quotes), still return the call to surface an error rather than dropping it.
+        if !cleanedArgsBlock.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return ToolCall(toolName: toolName, arguments: [:])
         }
         
         return nil
