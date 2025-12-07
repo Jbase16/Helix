@@ -164,8 +164,8 @@ final class HelixAppState: ObservableObject {
         set {
             guard let newValue else { return }
             if let idx = threads.firstIndex(where: { $0.id == newValue.id }) {
+                // Update in-memory state only. Avoid saving on every token during streaming.
                 threads[idx] = newValue
-                save()
             }
         }
     }
@@ -177,6 +177,8 @@ final class HelixAppState: ObservableObject {
         guard var thread = currentThread else { return }
         thread.clear()
         currentThread = thread
+        // Persist this explicit user action immediately.
+        save()
     }
 
     /// Send a user message and stream an assistant reply into the selected thread.
@@ -194,6 +196,9 @@ final class HelixAppState: ObservableObject {
         thread.append(assistantPlaceholder)
         let replyID = assistantPlaceholder.id
         currentThread = thread
+        // Save once after adding the user + placeholder messages to avoid data loss,
+        // but do not save on every streaming token.
+        save()
 
         // 3. Route to either Pure Chat or Agent Loop based on message content
         if needsAgentLoop(trimmed) {
